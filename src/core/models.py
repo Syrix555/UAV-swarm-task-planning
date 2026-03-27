@@ -26,6 +26,7 @@ class Target:
     x: float
     y: float
     value: float
+    required_uavs: int = 1  # 需要分配的无人机数量（饱和攻击）
 
 
 @dataclass
@@ -36,12 +37,12 @@ class Threat:
     radius: float
 
     def threat_cost_at(self, x: float, y: float) -> float:
+        """二次威胁模型：越靠近威胁中心代价越大，半径外为0。"""
         dist = math.hypot(self.x - x, self.y - y)
         if dist >= self.radius:
             return 0.0
-        if dist < 1e-6:
-            dist = 1e-6
-        return math.exp(self.radius / dist - 1)
+        s = 1.0 - dist / self.radius
+        return 40.0 * (s ** 2)              # 威胁代价最大为40，且呈二次衰减
 
 
 class Battlefield:

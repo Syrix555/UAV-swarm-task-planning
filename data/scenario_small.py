@@ -13,11 +13,11 @@ def create_small_scenario() -> Battlefield:
     ]
 
     targets = [
-        Target(id=0, x=80, y=20, value=8.0),
-        Target(id=1, x=85, y=45, value=10.0),
-        Target(id=2, x=75, y=60, value=6.0),
-        Target(id=3, x=90, y=75, value=9.0),
-        Target(id=4, x=80, y=90, value=7.0),
+        Target(id=0, x=80, y=20, value=8.0, required_uavs=2),
+        Target(id=1, x=85, y=45, value=10.0, required_uavs=3),
+        Target(id=2, x=75, y=60, value=6.0, required_uavs=1),
+        Target(id=3, x=90, y=75, value=9.0, required_uavs=2),
+        Target(id=4, x=80, y=90, value=7.0, required_uavs=2),
     ]
 
     threats = [

@@ -14,7 +14,7 @@ def cost_distance(assignment: np.ndarray, battlefield: Battlefield) -> float:
 
 
 def cost_threat(assignment: np.ndarray, battlefield: Battlefield) -> float:
-    """威胁代价：所有分配对的直线威胁积分总和（预估）"""
+    """威胁代价：基于二次威胁模型的直线威胁积分总和（预估）"""
     total = 0.0
     for i, uav in enumerate(battlefield.uavs):
         for j, target in enumerate(battlefield.targets):
