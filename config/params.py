@@ -27,6 +27,23 @@ PSO = {
     'c2': 2.0,            # 社会学习因子
 }
 
+# MCHA参数
+MCHA = {
+    'max_iter': 50,           # 最大重分配轮次
+    'min_score': float('-inf')  # 最小可接受竞标分数
+}
+
+# MCHA测试参数
+MCHA_TEST = {
+    'default_event': 'uav_lost',
+    'lost_uav_id': 0,
+    'threat_threshold': 1.0,
+    'new_threat_id': 99,
+    'new_threat_x': 48.0,
+    'new_threat_y': 68.0,
+    'new_threat_radius': 12.0,
+}
+
 # A*参数（待创新点确定后调整）
 ASTAR = {
     'grid_resolution': 1.0,  # km，栅格分辨率

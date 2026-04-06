@@ -59,7 +59,7 @@ class Battlefield:
     def threat_cost_on_line(self, x1: float, y1: float,
                             x2: float, y2: float,
                             num_samples: int = 20) -> float:
-        """沿直线采样计算威胁代价积分（用于PSO/CBBA阶段的预估）"""
+        """沿直线采样计算威胁代价积分（用于PSO/MCHA阶段的预估）"""
         total = 0.0
         for k in range(num_samples + 1):
             t = k / num_samples

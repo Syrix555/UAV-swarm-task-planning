@@ -8,7 +8,7 @@ from src.core.models import Battlefield, Target, Threat
 
 
 class EventType(Enum):
-    """触发CBBA重分配的事件类型。"""
+    """触发MCHA重分配的事件类型。"""
 
     UAV_LOST = "uav_lost"
     THREAT_ADDED = "threat_added"
@@ -28,12 +28,47 @@ class Event:
 
 @dataclass
 class ReallocationState:
-    """CBBA重分配输入状态。"""
+    """MCHA重分配输入状态。"""
 
     locked_assignment: np.ndarray
     open_targets: List[int]
     available_uavs: List[int]
     remaining_demand: Dict[int, int]
+
+
+def apply_event_to_battlefield(event: Event, battlefield: Battlefield) -> None:
+    """
+    将事件应用到当前战场状态。
+
+    当前主要用于确保 THREAT_ADDED 等事件不仅影响“释放判断”，
+    也会影响后续 MCHA 重分配阶段的代价计算。
+    """
+    if event.type == EventType.THREAT_ADDED:
+        new_threat = event.data['threat']
+        if all(existing.id != new_threat.id for existing in battlefield.threats):
+            battlefield.threats.append(new_threat)
+        return
+
+    if event.type == EventType.TARGET_ADDED:
+        new_target = event.data['target']
+        if all(existing.id != new_target.id for existing in battlefield.targets):
+            battlefield.targets.append(new_target)
+        return
+
+    if event.type == EventType.TARGET_REMOVED:
+        target_id = event.data['target_id']
+        battlefield.targets = [target for target in battlefield.targets if target.id != target_id]
+        return
+
+    if event.type == EventType.TARGET_DEMAND_CHANGED:
+        target = battlefield.get_target(event.data['target_id'])
+        target.required_uavs = event.data['new_required_uavs']
+        return
+
+    if event.type == EventType.TARGET_VALUE_CHANGED:
+        target = battlefield.get_target(event.data['target_id'])
+        target.value = event.data['new_value']
+        return
 
 
 def analyze_event_impact(
@@ -43,7 +78,7 @@ def analyze_event_impact(
     etas: np.ndarray,
 ) -> ReallocationState:
     """
-    根据事件分析原分配方案，生成CBBA需要处理的开放子问题。
+    根据事件分析原分配方案，生成MCHA需要处理的开放子问题。
     """
     if event.type == EventType.UAV_LOST:
         return handle_uav_lost(event.data['uav_id'], battlefield, assignment)
@@ -283,7 +318,7 @@ def get_available_uavs(
     excluded_uavs: Optional[List[int]] = None,
 ) -> List[int]:
     """
-    获取当前仍可参与CBBA竞标的无人机ID列表。
+    获取当前仍可参与MCHA竞标的无人机ID列表。
     """
     del battlefield
 
