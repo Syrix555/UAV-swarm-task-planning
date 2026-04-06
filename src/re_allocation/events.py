@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
-
 import numpy as np
 
 from src.core.models import Battlefield, Target, Threat
+from config.params import WEIGHTS           # 这里暂时使用预分配中的权重，未来可能依据场景不同使用不同的权重
 
 
 class EventType(Enum):
@@ -14,7 +14,8 @@ class EventType(Enum):
     THREAT_ADDED = "threat_added"
     TARGET_ADDED = "target_added"
     TARGET_REMOVED = "target_removed"
-    TARGET_DEMAND_CHANGED = "target_demand_changed"
+    TARGET_DEMAND_INCREASED = "target_demand_increased"
+    TARGET_DEMAND_DECREASED = "target_demand_decreased"
     TARGET_VALUE_CHANGED = "target_value_changed"
 
 
@@ -60,7 +61,7 @@ def apply_event_to_battlefield(event: Event, battlefield: Battlefield) -> None:
         battlefield.targets = [target for target in battlefield.targets if target.id != target_id]
         return
 
-    if event.type == EventType.TARGET_DEMAND_CHANGED:
+    if event.type in (EventType.TARGET_DEMAND_INCREASED, EventType.TARGET_DEMAND_DECREASED):
         target = battlefield.get_target(event.data['target_id'])
         target.required_uavs = event.data['new_required_uavs']
         return
@@ -98,7 +99,7 @@ def analyze_event_impact(
     if event.type == EventType.TARGET_REMOVED:
         return handle_target_removed(event.data['target_id'], battlefield, assignment)
 
-    if event.type == EventType.TARGET_DEMAND_CHANGED:
+    if event.type in (EventType.TARGET_DEMAND_INCREASED, EventType.TARGET_DEMAND_DECREASED):
         return handle_target_demand_changed(
             event.data['target_id'],
             event.data['new_required_uavs'],
@@ -269,7 +270,14 @@ def handle_target_demand_changed(
             remaining_demand={target_id: remaining} if remaining > 0 else {},
         )
 
-    released_uavs = sorted(current_assigned, reverse=True)[:current_count - new_required_uavs]
+    release_count = current_count - new_required_uavs
+    released_uavs = select_uavs_to_release(
+        battlefield,
+        assignment,
+        target_id,
+        current_assigned,
+        release_count,
+    )
     released_pairs = [(uav_id, target_id) for uav_id in released_uavs]
     locked_assignment = build_locked_assignment(assignment, released_pairs)
     return ReallocationState(
@@ -278,6 +286,81 @@ def handle_target_demand_changed(
         available_uavs=get_available_uavs(battlefield, locked_assignment),
         remaining_demand={},
     )
+
+
+def select_uavs_to_release(
+    battlefield: Battlefield,
+    assignment: np.ndarray,
+    target_id: int,
+    assigned_uavs: List[int],
+    release_count: int,
+) -> List[int]:
+    """
+    当目标需求减少时，释放对该目标保留优先级最低的无人机。
+
+    释放排序依据与MCHA评分口径保持一致：
+    保留价值越低（距离越远、威胁越高、时间同步越差）的无人机越先释放。
+    """
+    target = battlefield.get_target(target_id)
+    scores = []
+
+    for uav_id in assigned_uavs:
+        uav = battlefield.get_uav(uav_id)
+        score = retention_score(uav, target, assignment, battlefield)
+        scores.append((score, uav_id))
+
+    scores.sort(key=lambda item: item[0])
+    return [uav_id for _, uav_id in scores[:release_count]]
+
+
+def retention_score(
+    uav,
+    target,
+    current_assignment: np.ndarray,
+    battlefield: Battlefield,
+    weights: Dict[str, float] = WEIGHTS,
+) -> float:
+    """
+    计算目标需求减少时无人机对当前目标的保留得分。
+    得分越低，越优先被释放。
+    """
+    distance_cost = uav.distance_to(target.x, target.y)
+    threat_cost = battlefield.threat_cost_on_line(uav.x, uav.y, target.x, target.y)
+    time_increment = target_time_consistency_cost(
+        uav.id,
+        target.id,
+        current_assignment,
+        battlefield,
+        weights['alpha'],
+    )
+    reward = target.value
+
+    return (
+        weights['w4'] * reward
+        - weights['w1'] * distance_cost
+        - weights['w2'] * threat_cost
+        - weights['w3'] * time_increment
+    )
+
+
+def target_time_consistency_cost(
+    uav_id: int,
+    target_id: int,
+    current_assignment: np.ndarray,
+    battlefield: Battlefield,
+    alpha: float,
+) -> float:
+    """计算某无人机保留在目标编队中时对应的时间协同代价。"""
+    target = battlefield.get_target(target_id)
+    assigned_uav_ids = np.where(current_assignment[:, target_id] == 1)[0].tolist()
+    if uav_id not in assigned_uav_ids:
+        assigned_uav_ids.append(uav_id)
+
+    etas = [
+        battlefield.get_uav(assigned_id).eta_to(target.x, target.y)
+        for assigned_id in assigned_uav_ids
+    ]
+    return synchronized_penalty(etas, alpha)
 
 
 def build_locked_assignment(
@@ -362,3 +445,12 @@ def threat_cost_on_line_for_single_threat(
 def battlefield_distance(x1: float, y1: float, x2: float, y2: float) -> float:
     """欧氏距离工具函数。"""
     return float(np.hypot(x1 - x2, y1 - y2))
+
+
+def synchronized_penalty(etas: List[float], alpha: float) -> float:
+    """计算一组到达时间的协同惩罚。"""
+    if len(etas) < 2:
+        return 0.0
+
+    t_syn = float(np.mean(etas))
+    return float(sum(alpha * (eta - t_syn) ** 2 for eta in etas))

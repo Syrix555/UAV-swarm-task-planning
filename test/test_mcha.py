@@ -1,6 +1,6 @@
 """
 MCHA重分配测试脚本
-支持 UAV_LOST 与 THREAT_ADDED 两类事件测试。
+支持 UAV_LOST、THREAT_ADDED、TARGET_DEMAND_INCREASED 与 TARGET_DEMAND_DECREASED 四类事件测试。
 """
 import os
 import sys
@@ -19,6 +19,7 @@ from src.re_allocation.events import (
     EventType,
     analyze_event_impact,
     apply_event_to_battlefield,
+    retention_score,
 )
 
 
@@ -82,6 +83,21 @@ def print_summary(event, state, result, battlefield, changes):
     print(f"满足需求目标数: {satisfied_targets}/{len(battlefield.targets)}")
 
 
+def print_decrease_scores(battlefield, assignment, target_id):
+    print("\n=== 需求减少释放评分 ===")
+    target = battlefield.get_target(target_id)
+    assigned_uavs = np.where(assignment[:, target_id] == 1)[0].tolist()
+    scored = []
+    for uav_id in assigned_uavs:
+        uav = battlefield.get_uav(uav_id)
+        score = retention_score(uav, target, assignment, battlefield)
+        scored.append((score, uav_id))
+
+    scored.sort(key=lambda item: item[0])
+    for score, uav_id in scored:
+        print(f"UAV-{uav_id}: retention_score={score:.4f}")
+
+
 def build_uav_lost_event(lost_uav_id):
     return Event(
         type=EventType.UAV_LOST,
@@ -105,7 +121,27 @@ def build_threat_added_event():
     )
 
 
-def describe_event(event):
+def build_target_demand_increased_event():
+    return Event(
+        type=EventType.TARGET_DEMAND_INCREASED,
+        data={
+            "target_id": MCHA_TEST['target_demand_target_id'],
+            "new_required_uavs": MCHA_TEST['target_demand_new_required_uavs'],
+        },
+    )
+
+
+def build_target_demand_decreased_event():
+    return Event(
+        type=EventType.TARGET_DEMAND_DECREASED,
+        data={
+            "target_id": MCHA_TEST['target_demand_decrease_target_id'],
+            "new_required_uavs": MCHA_TEST['target_demand_decrease_new_required_uavs'],
+        },
+    )
+
+
+def describe_event(event, old_required_uavs=None):
     if event.type == EventType.UAV_LOST:
         return f"模拟 UAV-{event.data['uav_id']} 损失"
     if event.type == EventType.THREAT_ADDED:
@@ -113,6 +149,14 @@ def describe_event(event):
         return (
             f"模拟新增威胁 Threat-{threat.id} at ({threat.x}, {threat.y}), "
             f"radius={threat.radius}"
+        )
+    if event.type in (EventType.TARGET_DEMAND_INCREASED, EventType.TARGET_DEMAND_DECREASED):
+        if old_required_uavs is None:
+            old_required_uavs = event.data['new_required_uavs']
+        direction = "增加" if event.type == EventType.TARGET_DEMAND_INCREASED else "减少"
+        return (
+            f"模拟目标 Target-{event.data['target_id']} 需求{direction}为 "
+            f"{event.data['new_required_uavs']}"
         )
     return f"模拟事件 {event.type.value}"
 
@@ -128,8 +172,14 @@ def main():
     event_mode = os.environ.get("MCHA_EVENT", MCHA_TEST['default_event']).strip().lower()
     if event_mode == "threat_added":
         event = build_threat_added_event()
+    elif event_mode == "target_demand_increased":
+        event = build_target_demand_increased_event()
+    elif event_mode == "target_demand_decreased":
+        event = build_target_demand_decreased_event()
     else:
         event = build_uav_lost_event(MCHA_TEST['lost_uav_id'])
+
+    old_required_uavs = None
 
     print("\n=== 事件参数 ===")
     if event.type == EventType.UAV_LOST:
@@ -140,12 +190,21 @@ def main():
         print(f"threat_center: ({threat.x}, {threat.y})")
         print(f"threat_radius: {threat.radius}")
         print(f"threat_threshold: {event.data['threat_threshold']}")
+    if event.type in (EventType.TARGET_DEMAND_INCREASED, EventType.TARGET_DEMAND_DECREASED):
+        target = battlefield.get_target(event.data['target_id'])
+        old_required_uavs = target.required_uavs
+        print(f"target_id: {event.data['target_id']}")
+        print(f"old_required_uavs: {old_required_uavs}")
+        print(f"new_required_uavs: {event.data['new_required_uavs']}")
+        print(f"change_direction: {'increase' if event.type == EventType.TARGET_DEMAND_INCREASED else 'decrease'}")
+        if event.type == EventType.TARGET_DEMAND_DECREASED:
+            print_decrease_scores(battlefield, assignment, event.data['target_id'])
 
     apply_event_to_battlefield(event, battlefield)
     state = analyze_event_impact(event, battlefield, assignment, etas)
     print_state(state)
 
-    print(f"\n正在执行MCHA重分配（{describe_event(event)}）...")
+    print(f"\n正在执行MCHA重分配（{describe_event(event, old_required_uavs)}）...")
     result = run_mcha(battlefield, WEIGHTS, state, MCHA)
 
     print_assignment("MCHA重分配结果", battlefield, result.assignment)
@@ -165,6 +224,14 @@ def main():
         print(f"损失无人机 UAV-{lost_uav_id} 是否已清空任务: {np.sum(result.assignment[lost_uav_id]) == 0}")
     if event.type == EventType.THREAT_ADDED:
         print(f"当前战场威胁区数量: {len(battlefield.threats)}")
+    if event.type in (EventType.TARGET_DEMAND_INCREASED, EventType.TARGET_DEMAND_DECREASED):
+        target_id = event.data['target_id']
+        new_required = event.data['new_required_uavs']
+        assigned_count = int(np.sum(result.assignment[:, target_id]))
+        if event.type == EventType.TARGET_DEMAND_DECREASED:
+            print(f"目标{target_id} 需求减少后是否裁剪到位: {assigned_count == new_required}")
+        else:
+            print(f"目标{target_id} 需求增加后是否补齐: {assigned_count >= new_required}")
 
     for target in battlefield.targets:
         assigned_count = int(np.sum(result.assignment[:, target.id]))

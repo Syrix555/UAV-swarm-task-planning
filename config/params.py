@@ -42,6 +42,10 @@ MCHA_TEST = {
     'new_threat_x': 48.0,
     'new_threat_y': 68.0,
     'new_threat_radius': 12.0,
+    'target_demand_increase_target_id': 6,
+    'target_demand_increase_new_required_uavs': 4,
+    'target_demand_decrease_target_id': 1,
+    'target_demand_decrease_new_required_uavs': 2,
 }
 
 # A*参数（待创新点确定后调整）
