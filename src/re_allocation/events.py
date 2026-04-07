@@ -208,13 +208,14 @@ def handle_target_added(
 ) -> ReallocationState:
     """
     新增目标事件：
+    - 扩展分配矩阵以容纳新目标
     - 原分配全部锁定
     - 新目标进入开放任务池
     """
     del battlefield
 
-    locked_assignment = assignment.copy()
-    available_uavs = list(range(assignment.shape[0]))
+    locked_assignment = extend_assignment_for_new_target(assignment, 1)
+    available_uavs = list(range(locked_assignment.shape[0]))
     return ReallocationState(
         locked_assignment=locked_assignment,
         open_targets=[new_target.id],
@@ -375,6 +376,16 @@ def build_locked_assignment(
         if 0 <= uav_id < locked_assignment.shape[0] and 0 <= target_id < locked_assignment.shape[1]:
             locked_assignment[uav_id, target_id] = 0
     return locked_assignment
+
+
+def extend_assignment_for_new_target(
+    assignment: np.ndarray,
+    num_new_targets: int = 1,
+) -> np.ndarray:
+    """为新增目标扩展分配矩阵列数。"""
+    num_uavs = assignment.shape[0]
+    extra = np.zeros((num_uavs, num_new_targets), dtype=assignment.dtype)
+    return np.hstack((assignment, extra))
 
 
 def compute_remaining_demand(
