@@ -54,7 +54,13 @@ def build_slot_mapping(battlefield: Battlefield) -> Tuple[int, List[int]]:
 
 def logistic_init(num_particles: int, dim: int, num_uavs: int) -> np.ndarray:
     """
-    使用Logistic混沌映射生成初始种群
+    使用Logistic混沌映射生成初始种群。
+
+    针对当前 ammo=1、总槽位数不超过无人机数量的场景，
+    这里不再将每个槽位独立映射为无人机编号，而是先生成一组
+    长度为 num_uavs 的混沌序列，再按序列值排序得到一个无人机排列，
+    最后取前 dim 个元素作为粒子编码。这样可以显著降低初始粒子
+    中“同一无人机重复占据多个槽位”导致的不可行性。
 
     Parameters:
         num_particles: 粒子数量
@@ -64,10 +70,9 @@ def logistic_init(num_particles: int, dim: int, num_uavs: int) -> np.ndarray:
     Returns:
         shape=(num_particles, dim) 的整数数组，每个元素为无人机编号 [0, N-1]
     """
-    # 生成初始值z0，必须避开Logistic映射的不动点和周期点
-    # 不动点: z=0, z=0.75 (当μ=4时 4*0.75*0.25=0.75)
-    # 周期-2点: z≈0.3455, z≈0.9045
-    # 以及 z=0.5, z=0.25, z=1.0 附近，这些点会导致序列退化为周期序列
+    if dim > num_uavs:
+        raise ValueError('当前排列型初始化要求 dim <= num_uavs，请检查 ammo 或目标需求配置')
+
     fixed_points = [0.0, 0.25, 0.5, 0.75, 1.0]
     z = np.random.rand()
     while any(abs(z - fp) < 0.01 for fp in fixed_points):
@@ -75,21 +80,30 @@ def logistic_init(num_particles: int, dim: int, num_uavs: int) -> np.ndarray:
 
     particles = []
     for _ in range(num_particles):
-        row = []
-        for _ in range(dim):
+        chaotic_values = []
+        for uav_id in range(num_uavs):
             z = 4.0 * z * (1 - z)
-            # 使用 floor 映射到 [0, num_uavs-1]
-            # floor 保证每个无人机编号被映射到的概率区间长度相等，分布均匀
-            uav_id = int(np.floor(z * num_uavs))
-            uav_id = min(uav_id, num_uavs - 1)  # 防止 z=1.0 时越界
-            row.append(uav_id)
+            chaotic_values.append((z, uav_id))
+
+        chaotic_values.sort(key=lambda item: item[0])
+        row = [uav_id for _, uav_id in chaotic_values[:dim]]
         particles.append(row)
-    return np.array(particles)
+
+    return np.array(particles, dtype=int)
 
 
-# ============================================================
-# 创新点二：余弦函数自适应惯性权重
-# ============================================================
+def random_init(num_particles: int, dim: int, num_uavs: int) -> np.ndarray:
+    """使用无放回随机排列方式生成初始种群。"""
+    if dim > num_uavs:
+        raise ValueError('当前排列型初始化要求 dim <= num_uavs，请检查 ammo 或目标需求配置')
+
+    particles = []
+    for _ in range(num_particles):
+        row = np.random.permutation(num_uavs)[:dim]
+        particles.append(row)
+    return np.array(particles, dtype=int)
+
+
 # 传统PSO使用线性递减惯性权重 w(t) = w_start - (w_start-w_end)*t/T，
 # 这种线性策略在中期过渡不够平滑。
 # 余弦策略: w(t) = w_end + 0.5*(w_start - w_end)*(1 + cos(π*t/T))
@@ -113,9 +127,40 @@ def cosine_weight(t: int, T: int, w_start: float, w_end: float) -> float:
     return w_end + 0.5 * (w_start - w_end) * (1 + math.cos(math.pi * t / T))
 
 
-# ============================================================
-# 粒子编码与解码（多槽位编码）
-# ============================================================
+def linear_weight(t: int, T: int, w_start: float, w_end: float) -> float:
+    """线性递减惯性权重，用于与余弦策略做对比实验。"""
+    return w_start - (w_start - w_end) * t / T
+
+
+def swap_to_match(particle: np.ndarray, position_idx: int, target_uav: int) -> None:
+    """通过交换操作，将目标无人机移动到指定位置，保持排列合法。"""
+    if particle[position_idx] == target_uav:
+        return
+
+    match_idx = np.where(particle == target_uav)[0]
+    if len(match_idx) == 0:
+        return
+
+    other_idx = int(match_idx[0])
+    particle[position_idx], particle[other_idx] = particle[other_idx], particle[position_idx]
+
+
+def repair_permutation(particle: np.ndarray, num_uavs: int) -> np.ndarray:
+    """修复粒子中的重复编号，保持无人机编号不重复。"""
+    seen = set()
+    duplicates = []
+    for idx, value in enumerate(particle):
+        if int(value) in seen:
+            duplicates.append(idx)
+        else:
+            seen.add(int(value))
+
+    missing = [uav_id for uav_id in range(num_uavs) if uav_id not in seen]
+    for idx, new_value in zip(duplicates, missing):
+        particle[idx] = new_value
+
+    return particle
+
 
 def decode(particle: np.ndarray, num_uavs: int, num_targets: int,
            slot_to_target: List[int]) -> np.ndarray:
@@ -236,7 +281,11 @@ def evaluate_fitness(particle: np.ndarray, battlefield: Battlefield,
 # - 认知项c1使粒子记住自身历史最优，社会项c2使粒子学习群体最优
 
 def run_pso(battlefield: Battlefield, weights: dict,
-            pso_params: dict = None) -> Tuple[np.ndarray, np.ndarray, List[float]]:
+            pso_params: dict = None,
+            init_method: str = 'logistic',
+            inertia_strategy: str = 'cosine',
+            return_initial_population: bool = False,
+            return_diagnostics: bool = False) -> Tuple[np.ndarray, np.ndarray, List[float]]:
     """
     运行改进PSO算法求解任务预分配
 
@@ -249,6 +298,7 @@ def run_pso(battlefield: Battlefield, weights: dict,
         best_assignment: N×M 最优分配矩阵
         best_etas: 各无人机到分配目标的预计到达时间矩阵（N×M）
         convergence_curve: 每代全局最优适应度值列表
+        initial_population: 初始粒子种群（仅当 return_initial_population=True 时返回）
     """
     if pso_params is None:
         pso_params = PSO_PARAMS
@@ -265,8 +315,15 @@ def run_pso(battlefield: Battlefield, weights: dict,
     # 构建槽位映射
     total_slots, slot_to_target = build_slot_mapping(battlefield)
 
-    # === 第1步：Logistic混沌映射初始化种群 ===
-    positions = logistic_init(num_particles, total_slots, num_uavs)
+    # === 第1步：初始化种群 ===
+    if init_method == 'logistic':
+        positions = logistic_init(num_particles, total_slots, num_uavs)
+    elif init_method == 'random':
+        positions = random_init(num_particles, total_slots, num_uavs)
+    else:
+        raise ValueError(f"Unsupported init_method: {init_method}")
+
+    initial_population = positions.copy()
 
     # 初始化速度矩阵（连续值，初始为0）
     velocities = np.zeros((num_particles, total_slots), dtype=float)
@@ -276,6 +333,9 @@ def run_pso(battlefield: Battlefield, weights: dict,
         evaluate_fitness(positions[p], battlefield, weights, slot_to_target)
         for p in range(num_particles)
     ])
+    initial_best_fitness = float(np.min(fitness))
+    initial_mean_fitness = float(np.mean(fitness))
+    initial_infeasible_count = int(np.sum(fitness >= 1e6))
 
     # === 第3步：初始化个体最优和全局最优 ===
     pbest_positions = positions.copy()
@@ -289,8 +349,13 @@ def run_pso(battlefield: Battlefield, weights: dict,
 
     # === 第4步：迭代寻优 ===
     for t in range(max_iter):
-        # (a) 计算当前迭代的余弦惯性权重
-        w = cosine_weight(t, max_iter, w_start, w_end)
+        # (a) 计算当前迭代的惯性权重
+        if inertia_strategy == 'cosine':
+            w = cosine_weight(t, max_iter, w_start, w_end)
+        elif inertia_strategy == 'linear':
+            w = linear_weight(t, max_iter, w_start, w_end)
+        else:
+            raise ValueError(f"Unsupported inertia_strategy: {inertia_strategy}")
 
         for p in range(num_particles):
             r1 = np.random.rand(total_slots)
@@ -307,32 +372,26 @@ def run_pso(battlefield: Battlefield, weights: dict,
             # 限制速度范围，防止Sigmoid饱和导致概率恒为0或1
             velocities[p] = np.clip(velocities[p], -4.0, 4.0)
 
-            # (c) Sigmoid概率映射 → 离散位置更新
-            # 将连续速度映射为概率值 prob ∈ [0,1]
+            # (c) Sigmoid概率映射 → 基于交换的排列更新
             probs = 1.0 / (1.0 + np.exp(-velocities[p]))
 
             for d in range(total_slots):
                 rand_val = np.random.rand()
-                # 将概率空间划分为四个区间，实现多样化的位置更新：
-                # [0, w*prob)             → 保留当前位置（惯性，由w控制比例）
-                # [w*prob, w*prob+0.3*(1-w*prob))  → 向pbest学习（认知）
-                # 上区间之后到0.9        → 向gbest学习（社会）
-                # [0.9, 1.0)             → 随机探索（防止早熟收敛）
                 threshold_keep = w * probs[d]
                 threshold_pbest = threshold_keep + 0.3 * (1 - threshold_keep)
                 threshold_gbest = 0.9
 
                 if rand_val < threshold_keep:
-                    pass  # 保留当前分配不变（惯性）
+                    continue
                 elif rand_val < threshold_pbest:
-                    # 向自身历史最优学习
-                    positions[p, d] = pbest_positions[p, d]
+                    swap_to_match(positions[p], d, int(pbest_positions[p, d]))
                 elif rand_val < threshold_gbest:
-                    # 向全局最优学习
-                    positions[p, d] = gbest_position[d]
+                    swap_to_match(positions[p], d, int(gbest_position[d]))
                 else:
-                    # 随机探索：随机分配一个无人机，保持种群多样性
-                    positions[p, d] = np.random.randint(0, num_uavs)
+                    swap_idx = np.random.randint(0, total_slots)
+                    positions[p, d], positions[p, swap_idx] = positions[p, swap_idx], positions[p, d]
+
+            positions[p] = repair_permutation(positions[p], num_uavs)
 
             # (d) 评估适应度（含惩罚函数）
             fit = evaluate_fitness(positions[p], battlefield, weights,
@@ -363,5 +422,23 @@ def run_pso(battlefield: Battlefield, weights: dict,
         for j, target in enumerate(battlefield.targets):
             if best_assignment[i, j] == 1:
                 best_etas[i, j] = uav.eta_to(target.x, target.y)
+
+    diagnostics = {
+        'init_method': init_method,
+        'inertia_strategy': inertia_strategy,
+        'initial_best_fitness': initial_best_fitness,
+        'initial_mean_fitness': initial_mean_fitness,
+        'initial_infeasible_count': initial_infeasible_count,
+        'final_best_fitness': float(convergence_curve[-1]),
+    }
+
+    if return_initial_population and return_diagnostics:
+        return best_assignment, best_etas, convergence_curve, initial_population, diagnostics
+
+    if return_initial_population:
+        return best_assignment, best_etas, convergence_curve, initial_population
+
+    if return_diagnostics:
+        return best_assignment, best_etas, convergence_curve, diagnostics
 
     return best_assignment, best_etas, convergence_curve

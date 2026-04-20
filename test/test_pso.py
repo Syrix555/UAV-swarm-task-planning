@@ -101,9 +101,9 @@ def main():
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    os.makedirs('results', exist_ok=True)
-    plt.savefig('results/pso_test_result.png', dpi=150)
-    print(f"\n图表已保存至 results/pso_test_result.png")
+    os.makedirs('results/pre_allocation', exist_ok=True)
+    plt.savefig('results/pre_allocation/pso_test_result.png', dpi=150)
+    print(f"\n图表已保存至 results/pre_allocation/pso_test_result.png")
     plt.show()
 
 
