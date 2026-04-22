@@ -137,32 +137,29 @@ def plot_eta_distribution(
     return fig, ax
 
 
-def plot_target_loads(
-    battlefield: Battlefield,
-    assignment: np.ndarray,
-    title: str,
-    output_path: Optional[str] = None,
-):
-    fig, ax = plt.subplots(figsize=(8, 5.5))
-    target_ids = [target.id for target in battlefield.targets]
-    assigned_counts = [int(np.sum(assignment[:, target.id])) for target in battlefield.targets]
-    required_counts = [target.required_uavs for target in battlefield.targets]
 
-    x = np.arange(len(target_ids))
-    width = 0.38
-    ax.bar(x - width / 2, assigned_counts, width=width, label='实际分配数量', color='#1f77b4')
-    ax.bar(x + width / 2, required_counts, width=width, label='需求数量', color='#ff7f0e')
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(target_ids)
-    ax.set_xlabel('目标编号')
-    ax.set_ylabel('无人机数量')
-    ax.set_title(title)
-    ax.legend()
-    ax.grid(True, axis='y', alpha=0.3)
+def draw_path_lines(
+    ax,
+    path_points,
+    color: str,
+    label: str,
+    linestyle: str = '-',
+    linewidth: float = 1.8,
+    alpha: float = 0.9,
+) -> None:
+    """绘制单条路径折线。"""
+    if path_points is None or len(path_points) < 2:
+        return
 
-    if output_path is not None:
-        ensure_output_dir(output_path)
-        fig.savefig(output_path, dpi=180)
-
-    return fig, ax
+    xs = [point[0] for point in path_points]
+    ys = [point[1] for point in path_points]
+    ax.plot(
+        xs,
+        ys,
+        linestyle=linestyle,
+        linewidth=linewidth,
+        color=color,
+        alpha=alpha,
+        label=label,
+    )

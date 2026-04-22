@@ -53,7 +53,19 @@ MCHA_TEST = {
     'target_demand_decrease_new_required_uavs': 2,
 }
 
-# A*参数（待创新点确定后调整）
+# A*参数（路径规划）
 ASTAR = {
-    'grid_resolution': 1.0,  # km，栅格分辨率
+    'grid_resolution': 1.0,          # km，栅格分辨率
+    'safety_margin': 2.0,            # km，威胁区安全膨胀半径
+    'allow_diagonal': True,          # 是否启用8邻域
+    'bspline_degree': 3,             # 局部 B 样条次数
+    'smoothing_factor': 1.0,         # 局部 B 样条拟合平滑参数，<=0 时不平滑
+    'sample_step': 0.5,              # km，输出曲线弧长采样步长
+    'corner_angle_threshold_deg': 15.0,  # 度，超过该转角才触发局部平滑
+    'corner_window_points': 3,       # 局部平滑窗口点数
+    'min_turn_radius': 3.0,          # km，最小转弯半径
+    'enable_kinematic_path': True,   # 是否启用局部圆弧运动学约束路径
+    'kinematic_sample_step': 0.25,   # km，圆弧路径采样步长
+    'kinematic_preferred_radius_scale': 1.5,  # 自适应圆弧期望半径倍数
+    'enable_bspline_after_kinematic': True,  # 是否在运动学路径上继续做局部 B 样条
 }

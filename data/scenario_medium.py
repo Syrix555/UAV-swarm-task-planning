@@ -25,9 +25,9 @@ def create_medium_scenario() -> Battlefield:
 
     threats = [
         Threat(id=0, x=40, y=20, radius=8.0),
-        Threat(id=1, x=55, y=35, radius=9.0),
-        Threat(id=2, x=45, y=55, radius=10.0),
-        Threat(id=3, x=60, y=75, radius=9.0),
+        Threat(id=1, x=55, y=38, radius=9.0),
+        Threat(id=2, x=35, y=55, radius=10.0),
+        Threat(id=3, x=60, y=70, radius=9.0),
         Threat(id=4, x=50, y=90, radius=8.0),
     ]
 
