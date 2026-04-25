@@ -27,6 +27,9 @@ class Target:
     y: float
     value: float
     required_uavs: int = 1  # 需要分配的无人机数量（饱和攻击）
+    service_time: float = 0.0
+    time_window_start: float | None = None
+    time_window_end: float | None = None
 
 
 @dataclass
