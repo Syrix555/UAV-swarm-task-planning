@@ -138,9 +138,72 @@ def test_uav_lost_releases_whole_sequence_and_repairs_open_tasks():
     assert_true(int(np.sum(assignment[0])) == 0, '兼容矩阵中损失 UAV 也应无任务')
 
 
+def test_target_added_appends_new_target_to_available_uav_sequence():
+    battlefield = build_plan_battlefield()
+    plan = build_initial_plan()
+    new_target = Target(id=3, x=80.0, y=72.0, value=9.5, required_uavs=1)
+    event = Event(
+        type=EventType.TARGET_ADDED,
+        data={
+            'target': new_target,
+        },
+    )
+
+    apply_event_to_battlefield(event, battlefield)
+    state = analyze_plan_event_impact(event, battlefield, plan)
+    result = run_mcha_for_plan(battlefield, WEIGHTS, state, MCHA)
+
+    updated_plan = result.assignment_plan
+    assert_true(state.open_targets == [3], '新增目标应进入开放任务集合')
+    assert_true(state.remaining_demand == {3: 1}, '新增目标应产生对应需求')
+    assert_true(result.remaining_demand[3] == 0, 'MCHA 应补齐新增目标需求')
+    assert_true(len(updated_plan.target_assignees[3]) == 1, '新增目标应分配给1架 UAV')
+
+    new_uav_id = updated_plan.target_assignees[3][0]
+    assert_true(updated_plan.uav_task_sequences[new_uav_id].target_ids()[-1] == 3, '新增目标应追加到任务链尾部')
+    assert_true(updated_plan.uav_task_sequences[0].target_ids() == [0, 1], '原有任务链应保持不变')
+
+    assert_plan_feasible(battlefield, updated_plan)
+    assignment = updated_plan.to_assignment_matrix(num_uavs=3, num_targets=4)
+    assert_true(assignment.shape == (3, 4), '兼容矩阵应扩展到新增目标列')
+    assert_true(int(np.sum(assignment[:, 3])) == 1, '兼容矩阵中新增目标应满足需求')
+
+
+def test_target_added_supports_required_uavs_greater_than_one():
+    battlefield = build_plan_battlefield()
+    plan = build_initial_plan()
+    new_target = Target(id=3, x=80.0, y=72.0, value=9.5, required_uavs=2)
+    event = Event(
+        type=EventType.TARGET_ADDED,
+        data={
+            'target': new_target,
+        },
+    )
+
+    apply_event_to_battlefield(event, battlefield)
+    state = analyze_plan_event_impact(event, battlefield, plan)
+    result = run_mcha_for_plan(battlefield, WEIGHTS, state, MCHA)
+
+    updated_plan = result.assignment_plan
+    target_assignees = updated_plan.target_assignees[3]
+    assert_true(state.remaining_demand == {3: 2}, '新增目标 required_uavs=2 时应产生两个需求槽位')
+    assert_true(result.remaining_demand[3] == 0, 'MCHA 应补齐新增目标多 UAV 需求')
+    assert_true(len(target_assignees) == 2, '新增目标应分配给两架 UAV')
+    assert_true(len(set(target_assignees)) == 2, '新增目标不应重复分给同一 UAV')
+
+    for uav_id in target_assignees:
+        assert_true(updated_plan.uav_task_sequences[uav_id].target_ids()[-1] == 3, '新增目标应追加到每个补位 UAV 的任务链尾部')
+
+    assert_plan_feasible(battlefield, updated_plan)
+    assignment = updated_plan.to_assignment_matrix(num_uavs=3, num_targets=4)
+    assert_true(int(np.sum(assignment[:, 3])) == 2, '兼容矩阵中新增目标应满足 required_uavs=2')
+
+
 TEST_CASES = [
     test_target_demand_increase_appends_missing_task_to_sequence_plan,
     test_uav_lost_releases_whole_sequence_and_repairs_open_tasks,
+    test_target_added_appends_new_target_to_available_uav_sequence,
+    test_target_added_supports_required_uavs_greater_than_one,
 ]
 
 

@@ -163,7 +163,43 @@ def analyze_plan_event_impact(
             plan,
         )
 
+    if event.type == EventType.TARGET_ADDED:
+        return handle_plan_target_added(
+            event.data['target'],
+            battlefield,
+            plan,
+        )
+
     raise ValueError(f"任务序列版暂不支持的事件类型: {event.type}")
+
+
+def handle_plan_target_added(
+    new_target: Target,
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+) -> PlanReallocationState:
+    """
+    任务序列版新增目标事件。
+
+    第一版支持单个连续 id 新目标：
+    - 要求新目标已经通过 apply_event_to_battlefield 加入 battlefield
+    - 要求 target.id == len(battlefield.targets) - 1
+    - 支持 required_uavs >= 1
+    """
+    if new_target.id != len(battlefield.targets) - 1:
+        raise ValueError('任务序列版 TARGET_ADDED 暂只支持连续的新目标 id')
+
+    battlefield_target = battlefield.get_target(new_target.id)
+    if battlefield_target.id in plan.target_assignees:
+        raise ValueError('新增目标不应已存在于当前 AssignmentPlan')
+
+    locked_plan = copy_assignment_plan(plan)
+    return PlanReallocationState(
+        locked_plan=locked_plan,
+        open_targets=[battlefield_target.id],
+        available_uavs=get_available_uavs_for_plan(battlefield, locked_plan),
+        remaining_demand={battlefield_target.id: battlefield_target.required_uavs},
+    )
 
 
 def handle_plan_uav_lost(
