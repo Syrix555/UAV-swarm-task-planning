@@ -156,7 +156,63 @@ def analyze_plan_event_impact(
             plan,
         )
 
+    if event.type == EventType.UAV_LOST:
+        return handle_plan_uav_lost(
+            event.data['uav_id'],
+            battlefield,
+            plan,
+        )
+
     raise ValueError(f"任务序列版暂不支持的事件类型: {event.type}")
+
+
+def handle_plan_uav_lost(
+    uav_id: int,
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+) -> PlanReallocationState:
+    """
+    任务序列版无人机损失事件。
+
+    第四阶段第二步采用整链释放策略：
+    - 清空损失 UAV 的任务链
+    - 将其原本承担的目标重新开放
+    - 从目标反向索引中移除损失 UAV
+    - 损失 UAV 不再参与后续竞标
+    """
+    locked_plan = copy_assignment_plan(plan)
+    lost_sequence = locked_plan.uav_task_sequences.get(uav_id)
+    released_targets = lost_sequence.target_ids() if lost_sequence is not None else []
+
+    if lost_sequence is not None:
+        lost_sequence.tasks = []
+
+    for target_id in released_targets:
+        assignees = locked_plan.target_assignees.get(target_id, [])
+        locked_plan.target_assignees[target_id] = [
+            assigned_uav_id for assigned_uav_id in assignees
+            if assigned_uav_id != uav_id
+        ]
+        if not locked_plan.target_assignees[target_id]:
+            del locked_plan.target_assignees[target_id]
+
+    open_targets = sorted(set(released_targets))
+    remaining_demand = compute_remaining_demand_for_plan(
+        battlefield,
+        locked_plan,
+        open_targets,
+    )
+
+    return PlanReallocationState(
+        locked_plan=locked_plan,
+        open_targets=sorted(remaining_demand.keys()),
+        available_uavs=get_available_uavs_for_plan(
+            battlefield,
+            locked_plan,
+            excluded_uavs=[uav_id],
+        ),
+        remaining_demand=remaining_demand,
+    )
 
 
 def handle_plan_target_demand_increased(
@@ -177,6 +233,22 @@ def handle_plan_target_demand_increased(
         available_uavs=get_available_uavs_for_plan(battlefield, locked_plan),
         remaining_demand={target_id: remaining} if remaining > 0 else {},
     )
+
+
+def compute_remaining_demand_for_plan(
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+    target_ids: List[int],
+) -> Dict[int, int]:
+    """计算任务序列方案中指定目标仍需补充的 UAV 数量。"""
+    remaining_demand: Dict[int, int] = {}
+    for target_id in target_ids:
+        target = battlefield.get_target(target_id)
+        assigned_count = len(plan.target_assignees.get(target_id, []))
+        remaining = max(0, target.required_uavs - assigned_count)
+        if remaining > 0:
+            remaining_demand[target_id] = remaining
+    return remaining_demand
 
 
 def copy_assignment_plan(plan: AssignmentPlan) -> AssignmentPlan:

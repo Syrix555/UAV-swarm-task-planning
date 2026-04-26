@@ -105,8 +105,42 @@ def test_target_demand_increase_appends_missing_task_to_sequence_plan():
     assert_true(int(np.sum(assignment[:, 1])) == 2, '兼容矩阵中目标1也应满足新增需求')
 
 
+def test_uav_lost_releases_whole_sequence_and_repairs_open_tasks():
+    battlefield = build_plan_battlefield()
+    plan = build_initial_plan()
+    event = Event(
+        type=EventType.UAV_LOST,
+        data={
+            'uav_id': 0,
+        },
+    )
+
+    state = analyze_plan_event_impact(event, battlefield, plan)
+    result = run_mcha_for_plan(battlefield, WEIGHTS, state, MCHA)
+
+    updated_plan = result.assignment_plan
+    assert_true(state.open_targets == [0, 1], 'UAV 损失后应释放其整条任务链')
+    assert_true(state.remaining_demand == {0: 1, 1: 1}, '释放目标应重新产生需求缺口')
+    assert_true(0 not in state.available_uavs, '损失 UAV 不应再参与重分配')
+    assert_true(updated_plan.uav_task_sequences[0].task_count() == 0, '损失 UAV 的任务链应被清空')
+    assert_true(result.remaining_demand[0] == 0 and result.remaining_demand[1] == 0, 'MCHA 应补齐释放任务')
+
+    for target_id in [0, 1, 2]:
+        required = battlefield.get_target(target_id).required_uavs
+        assigned_count = len(updated_plan.target_assignees.get(target_id, []))
+        assert_true(assigned_count == required, f'目标{target_id} 应满足需求')
+
+    for target_id in [0, 1]:
+        assert_true(0 not in updated_plan.target_assignees[target_id], '损失 UAV 不应出现在目标执行者中')
+
+    assert_plan_feasible(battlefield, updated_plan)
+    assignment = updated_plan.to_assignment_matrix(num_uavs=3, num_targets=3)
+    assert_true(int(np.sum(assignment[0])) == 0, '兼容矩阵中损失 UAV 也应无任务')
+
+
 TEST_CASES = [
     test_target_demand_increase_appends_missing_task_to_sequence_plan,
+    test_uav_lost_releases_whole_sequence_and_repairs_open_tasks,
 ]
 
 
