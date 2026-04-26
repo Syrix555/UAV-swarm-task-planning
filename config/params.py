@@ -5,7 +5,7 @@ MAP_SIZE = (100.0, 100.0)  # km x km
 
 # 无人机公共属性
 UAV_MAX_RANGE = 200.0    # km，最大航程
-UAV_MAX_AMMO = 1         # 最大弹药量
+UAV_MAX_AMMO = 3         # 最大弹药量
 UAV_SPEED = 250.0        # km/h，巡航速度
 
 # 目标函数权重（AHP初始值，后续实验调参）

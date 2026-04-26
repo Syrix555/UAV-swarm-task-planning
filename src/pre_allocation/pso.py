@@ -19,9 +19,10 @@
 
 import math
 import numpy as np
+from collections import defaultdict
 from typing import Tuple, List
-from src.core.models import Battlefield
-from src.core.objective import objective_function
+from src.core.models import AssignmentPlan, Battlefield
+from src.core.sequence_eval import evaluate_uav_task_sequence
 from config.params import PSO as PSO_PARAMS
 
 
@@ -52,15 +53,38 @@ def build_slot_mapping(battlefield: Battlefield) -> Tuple[int, List[int]]:
 # 覆盖(0,1)区间），利用这一特性替代伪随机数生成初始种群，
 # 可使初始粒子在解空间中分布更加均匀，避免算法因初始解集中而过早收敛。
 
-def logistic_init(num_particles: int, dim: int, num_uavs: int) -> np.ndarray:
+def _default_capacities(num_uavs: int) -> List[int]:
+    return [1 for _ in range(num_uavs)]
+
+
+def _validate_capacities(dim: int, num_uavs: int, uav_capacities: List[int]) -> None:
+    if len(uav_capacities) != num_uavs:
+        raise ValueError('uav_capacities 长度必须等于 num_uavs')
+    if any(capacity < 0 for capacity in uav_capacities):
+        raise ValueError('uav_capacities 不能包含负数')
+    if dim > sum(uav_capacities):
+        raise ValueError('任务槽位数超过 UAV 总 ammo 容量，请检查场景配置')
+
+
+def _capacity_pool(num_uavs: int, uav_capacities: List[int]) -> List[int]:
+    pool: List[int] = []
+    for uav_id in range(num_uavs):
+        pool.extend([uav_id] * uav_capacities[uav_id])
+    return pool
+
+
+def logistic_init(
+    num_particles: int,
+    dim: int,
+    num_uavs: int,
+    uav_capacities: List[int] | None = None,
+) -> np.ndarray:
     """
     使用Logistic混沌映射生成初始种群。
 
-    针对当前 ammo=1、总槽位数不超过无人机数量的场景，
-    这里不再将每个槽位独立映射为无人机编号，而是先生成一组
-    长度为 num_uavs 的混沌序列，再按序列值排序得到一个无人机排列，
-    最后取前 dim 个元素作为粒子编码。这样可以显著降低初始粒子
-    中“同一无人机重复占据多个槽位”导致的不可行性。
+    针对任务序列场景，初始化允许同一 UAV 在多个任务槽位中出现，
+    但出现次数不能超过其 ammo 容量。若不传入 uav_capacities，则保持
+    原有 ammo=1 的排列型初始化语义。
 
     Parameters:
         num_particles: 粒子数量
@@ -70,8 +94,9 @@ def logistic_init(num_particles: int, dim: int, num_uavs: int) -> np.ndarray:
     Returns:
         shape=(num_particles, dim) 的整数数组，每个元素为无人机编号 [0, N-1]
     """
-    if dim > num_uavs:
-        raise ValueError('当前排列型初始化要求 dim <= num_uavs，请检查 ammo 或目标需求配置')
+    capacities = uav_capacities if uav_capacities is not None else _default_capacities(num_uavs)
+    _validate_capacities(dim, num_uavs, capacities)
+    pool = _capacity_pool(num_uavs, capacities)
 
     fixed_points = [0.0, 0.25, 0.5, 0.75, 1.0]
     z = np.random.rand()
@@ -81,7 +106,7 @@ def logistic_init(num_particles: int, dim: int, num_uavs: int) -> np.ndarray:
     particles = []
     for _ in range(num_particles):
         chaotic_values = []
-        for uav_id in range(num_uavs):
+        for uav_id in pool:
             z = 4.0 * z * (1 - z)
             chaotic_values.append((z, uav_id))
 
@@ -92,14 +117,20 @@ def logistic_init(num_particles: int, dim: int, num_uavs: int) -> np.ndarray:
     return np.array(particles, dtype=int)
 
 
-def random_init(num_particles: int, dim: int, num_uavs: int) -> np.ndarray:
-    """使用无放回随机排列方式生成初始种群。"""
-    if dim > num_uavs:
-        raise ValueError('当前排列型初始化要求 dim <= num_uavs，请检查 ammo 或目标需求配置')
+def random_init(
+    num_particles: int,
+    dim: int,
+    num_uavs: int,
+    uav_capacities: List[int] | None = None,
+) -> np.ndarray:
+    """使用容量约束下的无放回随机采样生成初始种群。"""
+    capacities = uav_capacities if uav_capacities is not None else _default_capacities(num_uavs)
+    _validate_capacities(dim, num_uavs, capacities)
+    pool = np.array(_capacity_pool(num_uavs, capacities), dtype=int)
 
     particles = []
     for _ in range(num_particles):
-        row = np.random.permutation(num_uavs)[:dim]
+        row = np.random.permutation(pool)[:dim]
         particles.append(row)
     return np.array(particles, dtype=int)
 
@@ -162,6 +193,37 @@ def repair_permutation(particle: np.ndarray, num_uavs: int) -> np.ndarray:
     return particle
 
 
+def repair_capacity(particle: np.ndarray, uav_capacities: List[int]) -> np.ndarray:
+    """修复粒子，使每架 UAV 出现次数不超过 ammo 容量。"""
+    num_uavs = len(uav_capacities)
+    if len(particle) > sum(uav_capacities):
+        raise ValueError('任务槽位数超过 UAV 总 ammo 容量，无法修复粒子')
+
+    repaired = particle.copy()
+    counts = np.zeros(num_uavs, dtype=int)
+    overflow_indices: List[int] = []
+
+    for idx, value in enumerate(repaired):
+        uav_id = int(value)
+        if uav_id < 0 or uav_id >= num_uavs or counts[uav_id] >= uav_capacities[uav_id]:
+            overflow_indices.append(idx)
+            continue
+        counts[uav_id] += 1
+
+    available: List[int] = []
+    for uav_id, capacity in enumerate(uav_capacities):
+        available.extend([uav_id] * int(capacity - counts[uav_id]))
+
+    if len(available) < len(overflow_indices):
+        raise ValueError('没有足够的 UAV ammo 容量修复粒子')
+
+    np.random.shuffle(available)
+    for idx, uav_id in zip(overflow_indices, available):
+        repaired[idx] = uav_id
+
+    return repaired
+
+
 def decode(particle: np.ndarray, num_uavs: int, num_targets: int,
            slot_to_target: List[int]) -> np.ndarray:
     """
@@ -187,6 +249,48 @@ def decode(particle: np.ndarray, num_uavs: int, num_targets: int,
         uav_id = particle[d]
         assignment[uav_id, target_id] = 1
     return assignment
+
+
+def decode_to_assignment_plan(
+    particle: np.ndarray,
+    battlefield: Battlefield,
+    slot_to_target: List[int],
+    total_cost: float = 0.0,
+) -> AssignmentPlan:
+    """将粒子按链尾追加规则解码为 AssignmentPlan。"""
+    uav_ids = [uav.id for uav in battlefield.uavs]
+    plan = AssignmentPlan.empty(uav_ids)
+    target_assignee_sets: dict[int, set[int]] = defaultdict(set)
+
+    for slot_idx, target_id in enumerate(slot_to_target):
+        uav_id = int(particle[slot_idx])
+        if uav_id not in plan.uav_task_sequences:
+            continue
+        plan.uav_task_sequences[uav_id].append_target(target_id)
+        target_assignee_sets[target_id].add(uav_id)
+
+    plan.target_assignees = {
+        target_id: sorted(assignees)
+        for target_id, assignees in target_assignee_sets.items()
+        if assignees
+    }
+    plan.total_cost = total_cost
+    return plan
+
+
+def assignment_plan_to_eta_matrix(battlefield: Battlefield, plan: AssignmentPlan) -> np.ndarray:
+    """根据任务链累计到达时刻生成兼容旧流程的 ETA 矩阵。"""
+    num_uavs = len(battlefield.uavs)
+    num_targets = len(battlefield.targets)
+    etas = np.zeros((num_uavs, num_targets))
+
+    for sequence in plan.uav_task_sequences.values():
+        evaluated = evaluate_uav_task_sequence(battlefield, sequence)
+        for task in evaluated.evaluated_sequence.tasks:
+            if 0 <= sequence.uav_id < num_uavs and 0 <= task.target_id < num_targets:
+                etas[sequence.uav_id, task.target_id] = task.planned_arrival_time
+
+    return etas
 
 
 # ============================================================
@@ -215,48 +319,63 @@ def evaluate_fitness(particle: np.ndarray, battlefield: Battlefield,
     Returns:
         适应度值（越小越好）
     """
-    num_uavs = len(battlefield.uavs)
-    num_targets = len(battlefield.targets)
-    assignment = decode(particle, num_uavs, num_targets, slot_to_target)
-
-    # 基础目标函数值
-    fitness = objective_function(assignment, battlefield, weights)
-
-    # 惩罚项
     PENALTY = 1e6
+    plan = decode_to_assignment_plan(particle, battlefield, slot_to_target)
+
+    distance_cost = 0.0
+    threat_cost = 0.0
+    time_window_penalty = 0.0
+    task_reward = 0.0
+    constraint_penalty = 0.0
+
+    assigned_target_ids = set()
+    for sequence in plan.uav_task_sequences.values():
+        uav = battlefield.get_uav(sequence.uav_id)
+        evaluated = evaluate_uav_task_sequence(
+            battlefield,
+            sequence,
+            alpha=weights['alpha'],
+        )
+        distance_cost += evaluated.total_distance
+        time_window_penalty += evaluated.time_window_penalty
+
+        if not evaluated.is_ammo_feasible:
+            constraint_penalty += PENALTY * (sequence.task_count() - uav.ammo)
+        if not evaluated.is_range_feasible:
+            constraint_penalty += PENALTY * (evaluated.total_distance - uav.range_left)
+
+        current_x, current_y = uav.x, uav.y
+        for task in sequence.tasks:
+            target = battlefield.get_target(task.target_id)
+            threat_cost += battlefield.threat_cost_on_line(
+                current_x,
+                current_y,
+                target.x,
+                target.y,
+            )
+            current_x, current_y = target.x, target.y
+            assigned_target_ids.add(task.target_id)
+
+    for target_id in assigned_target_ids:
+        task_reward += battlefield.get_target(target_id).value
 
     # 饱和攻击惩罚：检查每个目标是否分配到了足够数量的不同无人机
-    # 从粒子编码中直接统计每个目标的不同无人机数（而非从assignment矩阵，
-    # 因为assignment矩阵会将重复分配折叠为一个1）
-    from collections import defaultdict
-    target_uav_sets = defaultdict(set)
+    target_uav_sets: dict[int, set[int]] = defaultdict(set)
     for d, target_id in enumerate(slot_to_target):
         target_uav_sets[target_id].add(int(particle[d]))
     for target in battlefield.targets:
         actual = len(target_uav_sets[target.id])
         if actual < target.required_uavs:
             # 不足的无人机数量越多，惩罚越大
-            fitness += PENALTY * (target.required_uavs - actual)
+            constraint_penalty += PENALTY * (target.required_uavs - actual)
 
-    # 无人机自身约束惩罚
-    for i, uav in enumerate(battlefield.uavs):
-        assigned_targets = np.where(assignment[i] == 1)[0]
-
-        # 弹药超限惩罚：分配的目标数超过实时弹药量
-        if len(assigned_targets) > uav.ammo:
-            fitness += PENALTY * (len(assigned_targets) - uav.ammo)
-
-        # 航程超限惩罚：到各目标的直线距离之和超过剩余航程
-        if len(assigned_targets) > 0:
-            total_dist = sum(
-                uav.distance_to(battlefield.targets[j].x,
-                                battlefield.targets[j].y)
-                for j in assigned_targets
-            )
-            if total_dist > uav.range_left:
-                fitness += PENALTY * (total_dist - uav.range_left)
-
-    return fitness
+    return (
+        weights['w1'] * distance_cost
+        + weights['w2'] * threat_cost
+        + weights['w3'] * time_window_penalty
+        + constraint_penalty
+        - weights['w4'] * task_reward
+    )
 
 
 # ============================================================
@@ -285,7 +404,8 @@ def run_pso(battlefield: Battlefield, weights: dict,
             init_method: str = 'logistic',
             inertia_strategy: str = 'cosine',
             return_initial_population: bool = False,
-            return_diagnostics: bool = False) -> Tuple[np.ndarray, np.ndarray, List[float]]:
+            return_diagnostics: bool = False,
+            return_assignment_plan: bool = False) -> Tuple[np.ndarray, np.ndarray, List[float]]:
     """
     运行改进PSO算法求解任务预分配
 
@@ -311,15 +431,17 @@ def run_pso(battlefield: Battlefield, weights: dict,
     w_end = pso_params['w_end']
     c1 = pso_params['c1']
     c2 = pso_params['c2']
+    uav_capacities = [uav.ammo for uav in battlefield.uavs]
 
     # 构建槽位映射
     total_slots, slot_to_target = build_slot_mapping(battlefield)
+    _validate_capacities(total_slots, num_uavs, uav_capacities)
 
     # === 第1步：初始化种群 ===
     if init_method == 'logistic':
-        positions = logistic_init(num_particles, total_slots, num_uavs)
+        positions = logistic_init(num_particles, total_slots, num_uavs, uav_capacities)
     elif init_method == 'random':
-        positions = random_init(num_particles, total_slots, num_uavs)
+        positions = random_init(num_particles, total_slots, num_uavs, uav_capacities)
     else:
         raise ValueError(f"Unsupported init_method: {init_method}")
 
@@ -372,7 +494,7 @@ def run_pso(battlefield: Battlefield, weights: dict,
             # 限制速度范围，防止Sigmoid饱和导致概率恒为0或1
             velocities[p] = np.clip(velocities[p], -4.0, 4.0)
 
-            # (c) Sigmoid概率映射 → 基于交换的排列更新
+            # (c) Sigmoid概率映射 → 基于容量修复的离散更新
             probs = 1.0 / (1.0 + np.exp(-velocities[p]))
 
             for d in range(total_slots):
@@ -384,14 +506,13 @@ def run_pso(battlefield: Battlefield, weights: dict,
                 if rand_val < threshold_keep:
                     continue
                 elif rand_val < threshold_pbest:
-                    swap_to_match(positions[p], d, int(pbest_positions[p, d]))
+                    positions[p, d] = int(pbest_positions[p, d])
                 elif rand_val < threshold_gbest:
-                    swap_to_match(positions[p], d, int(gbest_position[d]))
+                    positions[p, d] = int(gbest_position[d])
                 else:
-                    swap_idx = np.random.randint(0, total_slots)
-                    positions[p, d], positions[p, swap_idx] = positions[p, swap_idx], positions[p, d]
+                    positions[p, d] = np.random.randint(0, num_uavs)
 
-            positions[p] = repair_permutation(positions[p], num_uavs)
+            positions[p] = repair_capacity(positions[p], uav_capacities)
 
             # (d) 评估适应度（含惩罚函数）
             fit = evaluate_fitness(positions[p], battlefield, weights,
@@ -413,15 +534,14 @@ def run_pso(battlefield: Battlefield, weights: dict,
         convergence_curve.append(gbest_fitness)
 
     # === 第5步：输出结果 ===
-    best_assignment = decode(gbest_position, num_uavs, num_targets,
-                             slot_to_target)
-
-    # 计算ETA矩阵（无人机i到目标j的预计到达时间）
-    best_etas = np.zeros((num_uavs, num_targets))
-    for i, uav in enumerate(battlefield.uavs):
-        for j, target in enumerate(battlefield.targets):
-            if best_assignment[i, j] == 1:
-                best_etas[i, j] = uav.eta_to(target.x, target.y)
+    best_plan = decode_to_assignment_plan(
+        gbest_position,
+        battlefield,
+        slot_to_target,
+        total_cost=float(convergence_curve[-1]),
+    )
+    best_assignment = best_plan.to_assignment_matrix(num_uavs, num_targets)
+    best_etas = assignment_plan_to_eta_matrix(battlefield, best_plan)
 
     diagnostics = {
         'init_method': init_method,
@@ -432,13 +552,12 @@ def run_pso(battlefield: Battlefield, weights: dict,
         'final_best_fitness': float(convergence_curve[-1]),
     }
 
-    if return_initial_population and return_diagnostics:
-        return best_assignment, best_etas, convergence_curve, initial_population, diagnostics
-
+    outputs = [best_assignment, best_etas, convergence_curve]
+    if return_assignment_plan:
+        outputs.append(best_plan)
     if return_initial_population:
-        return best_assignment, best_etas, convergence_curve, initial_population
-
+        outputs.append(initial_population)
     if return_diagnostics:
-        return best_assignment, best_etas, convergence_curve, diagnostics
+        outputs.append(diagnostics)
 
-    return best_assignment, best_etas, convergence_curve
+    return tuple(outputs)
