@@ -3,8 +3,9 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-from src.core.models import Battlefield, Target, UAV
-from src.re_allocation.events import ReallocationState
+from src.core.models import AssignmentPlan, Battlefield, Target, TaskNode, UAV, UavTaskSequence
+from src.core.sequence_eval import evaluate_uav_task_sequence
+from src.re_allocation.events import PlanReallocationState, ReallocationState, copy_assignment_plan
 
 
 @dataclass
@@ -20,6 +21,18 @@ class BidResult:
 class MCHAResult:
     """MCHA重分配结果。"""
 
+    assignment: np.ndarray
+    etas: np.ndarray
+    selected_bids: List[BidResult]
+    remaining_demand: Dict[int, int]
+    iterations: int
+
+
+@dataclass
+class PlanMCHAResult:
+    """任务序列版 MCHA 重分配结果。"""
+
+    assignment_plan: AssignmentPlan
     assignment: np.ndarray
     etas: np.ndarray
     selected_bids: List[BidResult]
@@ -102,6 +115,236 @@ def run_mcha(
         remaining_demand=remaining_demand,
         iterations=iterations,
     )
+
+
+def run_mcha_for_plan(
+    battlefield: Battlefield,
+    weights: dict,
+    state: PlanReallocationState,
+    mcha_params: dict = None,
+) -> PlanMCHAResult:
+    """
+    在 AssignmentPlan 基础上，对开放目标执行链尾追加式 MCHA 重分配。
+    """
+    if mcha_params is None:
+        mcha_params = {}
+
+    max_iter = mcha_params.get('max_iter', 50)
+    min_score = mcha_params.get('min_score', float('-inf'))
+
+    current_plan = copy_assignment_plan(state.locked_plan)
+    open_targets = list(state.open_targets)
+    available_uavs = list(state.available_uavs)
+    remaining_demand = dict(state.remaining_demand)
+    selected_bids: List[BidResult] = []
+    iterations = 0
+
+    for iteration in range(max_iter):
+        iterations = iteration + 1
+
+        active_targets = [
+            target_id for target_id in open_targets
+            if remaining_demand.get(target_id, 0) > 0
+        ]
+        if not active_targets or not available_uavs:
+            break
+
+        bids = generate_plan_bids(
+            battlefield,
+            weights,
+            current_plan,
+            available_uavs,
+            active_targets,
+            remaining_demand,
+        )
+        bids = [bid for bid in bids if bid.score >= min_score]
+        if not bids:
+            break
+
+        accepted_bids, _ = resolve_bids(bids, remaining_demand)
+        if not accepted_bids:
+            break
+
+        current_plan = apply_bids_to_plan(current_plan, accepted_bids)
+        selected_bids.extend(accepted_bids)
+
+        for bid in accepted_bids:
+            remaining_demand[bid.target_id] = max(
+                0,
+                remaining_demand.get(bid.target_id, 0) - 1,
+            )
+
+        available_uavs = update_available_uavs_after_plan_round(
+            battlefield,
+            current_plan,
+            available_uavs,
+        )
+        open_targets = [
+            target_id for target_id in active_targets
+            if remaining_demand.get(target_id, 0) > 0
+        ]
+
+    num_uavs = len(battlefield.uavs)
+    num_targets = len(battlefield.targets)
+    assignment = current_plan.to_assignment_matrix(num_uavs, num_targets)
+    etas = compute_eta_matrix_for_plan(battlefield, current_plan)
+    current_plan.total_cost = float(sum(bid.score for bid in selected_bids))
+
+    return PlanMCHAResult(
+        assignment_plan=current_plan,
+        assignment=assignment,
+        etas=etas,
+        selected_bids=selected_bids,
+        remaining_demand=remaining_demand,
+        iterations=iterations,
+    )
+
+
+def generate_plan_bids(
+    battlefield: Battlefield,
+    weights: dict,
+    current_plan: AssignmentPlan,
+    available_uavs: List[int],
+    open_targets: List[int],
+    remaining_demand: Dict[int, int],
+) -> List[BidResult]:
+    """每轮为每架可用 UAV 生成一个链尾追加的当前最优投标。"""
+    bids: List[BidResult] = []
+
+    for uav_id in available_uavs:
+        uav = battlefield.get_uav(uav_id)
+        best_bid = None
+
+        for target_id in open_targets:
+            if remaining_demand.get(target_id, 0) <= 0:
+                continue
+
+            target = battlefield.get_target(target_id)
+            score = marginal_score_for_plan(uav, target, current_plan, battlefield, weights)
+            if best_bid is None or score > best_bid.score:
+                best_bid = BidResult(uav_id=uav_id, target_id=target_id, score=score)
+
+        if best_bid is not None and np.isfinite(best_bid.score):
+            bids.append(best_bid)
+
+    return bids
+
+
+def marginal_score_for_plan(
+    uav: UAV,
+    target: Target,
+    current_plan: AssignmentPlan,
+    battlefield: Battlefield,
+    weights: dict,
+) -> float:
+    """
+    任务序列版 MCHA 边际得分：
+    将目标追加到 UAV 任务链尾部，比较追加前后的链式代价变化。
+    """
+    sequence = current_plan.uav_task_sequences.get(uav.id, UavTaskSequence(uav_id=uav.id))
+    if target.id in sequence.target_ids():
+        return float('-inf')
+
+    candidate_tasks = list(sequence.tasks)
+    candidate_tasks.append(TaskNode(target_id=target.id, order=len(candidate_tasks)))
+    candidate_sequence = UavTaskSequence(uav_id=uav.id, tasks=candidate_tasks)
+
+    current_eval = evaluate_uav_task_sequence(
+        battlefield,
+        sequence,
+        alpha=weights['alpha'],
+    )
+    candidate_eval = evaluate_uav_task_sequence(
+        battlefield,
+        candidate_sequence,
+        alpha=weights['alpha'],
+    )
+    if not candidate_eval.is_feasible:
+        return float('-inf')
+
+    distance_delta = candidate_eval.total_distance - current_eval.total_distance
+    threat_delta = sequence_threat_cost(battlefield, candidate_sequence) - sequence_threat_cost(battlefield, sequence)
+    time_delta = candidate_eval.time_window_penalty - current_eval.time_window_penalty
+
+    return (
+        weights['w4'] * target.value
+        - weights['w1'] * distance_delta
+        - weights['w2'] * threat_delta
+        - weights['w3'] * time_delta
+    )
+
+
+def sequence_threat_cost(
+    battlefield: Battlefield,
+    sequence: UavTaskSequence,
+) -> float:
+    """计算任务链各航段的直线威胁代价估计。"""
+    if not sequence.tasks:
+        return 0.0
+
+    uav = battlefield.get_uav(sequence.uav_id)
+    current_x, current_y = uav.x, uav.y
+    total = 0.0
+    for task in sequence.tasks:
+        target = battlefield.get_target(task.target_id)
+        total += battlefield.threat_cost_on_line(current_x, current_y, target.x, target.y)
+        current_x, current_y = target.x, target.y
+    return total
+
+
+def apply_bids_to_plan(
+    plan: AssignmentPlan,
+    accepted_bids: List[BidResult],
+) -> AssignmentPlan:
+    """将本轮中标结果追加到对应 UAV 任务链尾部。"""
+    updated_plan = copy_assignment_plan(plan)
+
+    for bid in accepted_bids:
+        sequence = updated_plan.uav_task_sequences.setdefault(
+            bid.uav_id,
+            UavTaskSequence(uav_id=bid.uav_id),
+        )
+        sequence.append_target(bid.target_id)
+        assignees = updated_plan.target_assignees.setdefault(bid.target_id, [])
+        if bid.uav_id not in assignees:
+            assignees.append(bid.uav_id)
+            assignees.sort()
+
+    return updated_plan
+
+
+def update_available_uavs_after_plan_round(
+    battlefield: Battlefield,
+    current_plan: AssignmentPlan,
+    available_uavs: List[int],
+) -> List[int]:
+    """在一轮任务序列竞标结束后更新仍有 ammo 余量的 UAV。"""
+    next_available: List[int] = []
+    for uav_id in available_uavs:
+        uav = battlefield.get_uav(uav_id)
+        sequence = current_plan.uav_task_sequences.get(uav_id)
+        task_count = sequence.task_count() if sequence is not None else 0
+        if task_count < uav.ammo:
+            next_available.append(uav_id)
+    return next_available
+
+
+def compute_eta_matrix_for_plan(
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+) -> np.ndarray:
+    """根据任务链累计到达时刻生成 ETA 矩阵。"""
+    num_uavs = len(battlefield.uavs)
+    num_targets = len(battlefield.targets)
+    etas = np.zeros((num_uavs, num_targets))
+
+    for sequence in plan.uav_task_sequences.values():
+        evaluated = evaluate_uav_task_sequence(battlefield, sequence)
+        for task in evaluated.evaluated_sequence.tasks:
+            if 0 <= sequence.uav_id < num_uavs and 0 <= task.target_id < num_targets:
+                etas[sequence.uav_id, task.target_id] = task.planned_arrival_time
+
+    return etas
 
 
 def marginal_score(

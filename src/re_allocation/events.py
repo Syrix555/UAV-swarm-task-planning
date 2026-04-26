@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
-from src.core.models import Battlefield, Target, Threat
+from src.core.models import AssignmentPlan, Battlefield, Target, Threat
 from config.params import WEIGHTS           # 这里暂时使用预分配中的权重，未来可能依据场景不同使用不同的权重
 
 
@@ -32,6 +32,16 @@ class ReallocationState:
     """MCHA重分配输入状态。"""
 
     locked_assignment: np.ndarray
+    open_targets: List[int]
+    available_uavs: List[int]
+    remaining_demand: Dict[int, int]
+
+
+@dataclass
+class PlanReallocationState:
+    """任务序列版 MCHA 重分配输入状态。"""
+
+    locked_plan: AssignmentPlan
     open_targets: List[int]
     available_uavs: List[int]
     remaining_demand: Dict[int, int]
@@ -123,6 +133,86 @@ def analyze_event_impact(
         )
 
     raise ValueError(f"不支持的事件类型: {event.type}")
+
+
+def analyze_plan_event_impact(
+    event: Event,
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+) -> PlanReallocationState:
+    """
+    根据事件分析 AssignmentPlan，生成任务序列版 MCHA 需要处理的开放子问题。
+
+    第四阶段第一步先支持 TARGET_DEMAND_INCREASED：
+    - 保留现有任务链
+    - 根据目标当前执行者数量计算缺口
+    - 后续由 MCHA 将缺口任务追加到其他 UAV 任务链尾部
+    """
+    if event.type == EventType.TARGET_DEMAND_INCREASED:
+        return handle_plan_target_demand_increased(
+            event.data['target_id'],
+            event.data['new_required_uavs'],
+            battlefield,
+            plan,
+        )
+
+    raise ValueError(f"任务序列版暂不支持的事件类型: {event.type}")
+
+
+def handle_plan_target_demand_increased(
+    target_id: int,
+    new_required_uavs: int,
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+) -> PlanReallocationState:
+    """任务序列版目标需求增加事件：计算目标缺口，保留原任务链。"""
+    locked_plan = copy_assignment_plan(plan)
+    current_assignees = set(locked_plan.target_assignees.get(target_id, []))
+    current_count = len(current_assignees)
+    remaining = max(0, new_required_uavs - current_count)
+
+    return PlanReallocationState(
+        locked_plan=locked_plan,
+        open_targets=[target_id] if remaining > 0 else [],
+        available_uavs=get_available_uavs_for_plan(battlefield, locked_plan),
+        remaining_demand={target_id: remaining} if remaining > 0 else {},
+    )
+
+
+def copy_assignment_plan(plan: AssignmentPlan) -> AssignmentPlan:
+    """复制 AssignmentPlan，避免事件分析阶段修改原计划。"""
+    return AssignmentPlan(
+        uav_task_sequences={
+            uav_id: type(sequence)(
+                uav_id=sequence.uav_id,
+                tasks=list(sequence.tasks),
+            )
+            for uav_id, sequence in plan.uav_task_sequences.items()
+        },
+        target_assignees={
+            target_id: list(assignees)
+            for target_id, assignees in plan.target_assignees.items()
+        },
+        total_cost=plan.total_cost,
+    )
+
+
+def get_available_uavs_for_plan(
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+    excluded_uavs: Optional[List[int]] = None,
+) -> List[int]:
+    """获取任务序列中仍有 ammo 余量的 UAV。"""
+    excluded_set = set(excluded_uavs or [])
+    available_uavs: List[int] = []
+    for uav in battlefield.uavs:
+        if uav.id in excluded_set:
+            continue
+        sequence = plan.uav_task_sequences.get(uav.id)
+        task_count = sequence.task_count() if sequence is not None else 0
+        if task_count < uav.ammo:
+            available_uavs.append(uav.id)
+    return available_uavs
 
 
 def handle_uav_lost(

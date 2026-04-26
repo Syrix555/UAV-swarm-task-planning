@@ -42,7 +42,7 @@ MCHA_TEST = {
     'new_threat_x': 48.0,
     'new_threat_y': 68.0,
     'new_threat_radius': 12.0,
-    'target_added_id': 10,
+    'target_added_id': 18,
     'target_added_x': 84.0,
     'target_added_y': 50.0,
     'target_added_value': 9.5,
