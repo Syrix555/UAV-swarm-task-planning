@@ -23,8 +23,14 @@ from config.params import WEIGHTS, MCHA, MCHA_TEST
 from data.scenario_reallocation import create_reallocation_scenario
 from src.core.models import Threat, Target
 from src.pre_allocation.pso import run_pso
-from src.re_allocation.events import Event, EventType, analyze_event_impact, apply_event_to_battlefield
-from src.re_allocation.mcha import run_mcha
+from src.re_allocation.events import (
+    Event,
+    EventType,
+    analyze_event_impact,
+    analyze_plan_event_impact,
+    apply_event_to_battlefield,
+)
+from src.re_allocation.mcha import run_mcha, run_mcha_for_plan
 from src.visualization.reallocation import (
     plot_assignment_diff,
     plot_reallocation_before_after,
@@ -102,11 +108,54 @@ def event_title(event):
     return event.type.value
 
 
+def run_reallocation_for_visualization(
+    battlefield,
+    event,
+    assignment_before,
+    etas_before,
+    plan_before,
+):
+    """
+    运行可视化用的重分配流程。
+
+    THREAT_ADDED 已完成任务序列版改造，优先使用 AssignmentPlan 流程，
+    避免旧矩阵版在新增威胁场景下出现目标需求未补齐的展示问题。
+    """
+    if event.type == EventType.THREAT_ADDED:
+        state = analyze_plan_event_impact(event, battlefield, plan_before)
+        result = run_mcha_for_plan(battlefield, WEIGHTS, state, MCHA)
+        return state, result
+
+    state = analyze_event_impact(event, battlefield, assignment_before, etas_before)
+    result = run_mcha(battlefield, WEIGHTS, state, MCHA)
+    return state, result
+
+
+def print_target_satisfaction_summary(battlefield, assignment):
+    unsatisfied = []
+    for target in battlefield.targets:
+        assigned_count = int(np.sum(assignment[:, target.id]))
+        if assigned_count < target.required_uavs:
+            unsatisfied.append((target.id, assigned_count, target.required_uavs))
+
+    if not unsatisfied:
+        print('目标需求校验: 全部目标均已满足')
+        return
+
+    print('目标需求校验: 存在未满足目标')
+    for target_id, assigned_count, required_uavs in unsatisfied:
+        print(f'- Target-{target_id}: assigned={assigned_count}, required={required_uavs}')
+
+
 def main():
     battlefield_before = create_reallocation_scenario()
 
     print('正在运行PSO预分配...')
-    assignment_before, etas_before, curve = run_pso(battlefield_before, WEIGHTS)
+    assignment_before, etas_before, curve, plan_before = run_pso(
+        battlefield_before,
+        WEIGHTS,
+        return_assignment_plan=True,
+    )
     print(f'PSO完成，最终适应度: {curve[-1]:.4f}')
 
     event_mode = os.environ.get('MCHA_EVENT', 'uav_lost').strip().lower()
@@ -114,14 +163,20 @@ def main():
 
     battlefield_after = deepcopy(battlefield_before)
     apply_event_to_battlefield(event, battlefield_after)
-    state = analyze_event_impact(event, battlefield_after, assignment_before, etas_before)
-    result = run_mcha(battlefield_after, WEIGHTS, state, MCHA)
+    state, result = run_reallocation_for_visualization(
+        battlefield_after,
+        event,
+        assignment_before,
+        etas_before,
+        plan_before,
+    )
 
     print(f'当前事件: {event_title(event)}')
     print(f'open_targets: {state.open_targets}')
     print(f'remaining_demand: {state.remaining_demand}')
     print(f'iterations: {result.iterations}')
     print(f'selected_bids: {len(result.selected_bids)}')
+    print_target_satisfaction_summary(battlefield_after, result.assignment)
 
     event_name = event.type.value
     plot_reallocation_before_after(

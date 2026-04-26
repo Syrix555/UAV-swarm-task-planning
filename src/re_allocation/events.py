@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
-from src.core.models import AssignmentPlan, Battlefield, Target, Threat
+from src.core.models import AssignmentPlan, Battlefield, Target, TaskNode, Threat
 from config.params import WEIGHTS           # 这里暂时使用预分配中的权重，未来可能依据场景不同使用不同的权重
 
 
@@ -45,6 +45,7 @@ class PlanReallocationState:
     open_targets: List[int]
     available_uavs: List[int]
     remaining_demand: Dict[int, int]
+    forbidden_pairs: Optional[List[Tuple[int, int]]] = None
 
 
 def apply_event_to_battlefield(event: Event, battlefield: Battlefield) -> None:
@@ -142,12 +143,15 @@ def analyze_plan_event_impact(
 ) -> PlanReallocationState:
     """
     根据事件分析 AssignmentPlan，生成任务序列版 MCHA 需要处理的开放子问题。
-
-    第四阶段第一步先支持 TARGET_DEMAND_INCREASED：
-    - 保留现有任务链
-    - 根据目标当前执行者数量计算缺口
-    - 后续由 MCHA 将缺口任务追加到其他 UAV 任务链尾部
     """
+    if event.type == EventType.THREAT_ADDED:
+        return handle_plan_threat_added(
+            event.data['threat'],
+            battlefield,
+            plan,
+            event.data.get('threat_threshold', 0.0),
+        )
+
     if event.type == EventType.TARGET_DEMAND_INCREASED:
         return handle_plan_target_demand_increased(
             event.data['target_id'],
@@ -171,6 +175,95 @@ def analyze_plan_event_impact(
         )
 
     raise ValueError(f"任务序列版暂不支持的事件类型: {event.type}")
+
+
+def handle_plan_threat_added(
+    new_threat: Threat,
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+    threat_threshold: float = 0.0,
+) -> PlanReallocationState:
+    """
+    任务序列版新增威胁事件。
+
+    按 UAV 任务链逐段检查新增威胁影响：
+    - UAV 起点 -> 第一个任务
+    - 前一个任务 -> 后一个任务
+
+    若某航段威胁代价超过阈值，则保留该航段之前的安全前缀，
+    释放该航段目标及其后的任务后缀，由 MCHA 对释放目标进行局部修复。
+    """
+    locked_plan = copy_assignment_plan(plan)
+    open_targets = set()
+    forbidden_pairs: List[Tuple[int, int]] = []
+
+    for uav_id, sequence in locked_plan.uav_task_sequences.items():
+        if not sequence.tasks:
+            continue
+
+        uav = battlefield.get_uav(uav_id)
+        current_x, current_y = uav.x, uav.y
+        release_start_index = None
+
+        for index, task in enumerate(sequence.tasks):
+            target = battlefield.get_target(task.target_id)
+            added_cost = threat_cost_on_line_for_single_threat(
+                new_threat,
+                current_x,
+                current_y,
+                target.x,
+                target.y,
+            )
+            if added_cost > threat_threshold:
+                release_start_index = index
+                break
+
+            current_x, current_y = target.x, target.y
+
+        if release_start_index is None:
+            continue
+
+        released_tasks = sequence.tasks[release_start_index:]
+        kept_tasks = sequence.tasks[:release_start_index]
+        sequence.tasks = [
+            TaskNode(
+                target_id=task.target_id,
+                order=order,
+                planned_arrival_time=task.planned_arrival_time,
+                planned_service_time=task.planned_service_time,
+                estimated_path_length=task.estimated_path_length,
+            )
+            for order, task in enumerate(kept_tasks)
+        ]
+
+        for task in released_tasks:
+            target_id = task.target_id
+            open_targets.add(target_id)
+            forbidden_pairs.append((uav_id, target_id))
+
+            assignees = locked_plan.target_assignees.get(target_id, [])
+            next_assignees = [
+                assigned_uav_id for assigned_uav_id in assignees
+                if assigned_uav_id != uav_id
+            ]
+            if next_assignees:
+                locked_plan.target_assignees[target_id] = sorted(next_assignees)
+            elif target_id in locked_plan.target_assignees:
+                del locked_plan.target_assignees[target_id]
+
+    remaining_demand = compute_remaining_demand_for_plan(
+        battlefield,
+        locked_plan,
+        sorted(open_targets),
+    )
+
+    return PlanReallocationState(
+        locked_plan=locked_plan,
+        open_targets=sorted(remaining_demand.keys()),
+        available_uavs=get_available_uavs_for_plan(battlefield, locked_plan),
+        remaining_demand=remaining_demand,
+        forbidden_pairs=sorted(forbidden_pairs),
+    )
 
 
 def handle_plan_target_added(

@@ -136,6 +136,7 @@ def run_mcha_for_plan(
     open_targets = list(state.open_targets)
     available_uavs = list(state.available_uavs)
     remaining_demand = dict(state.remaining_demand)
+    forbidden_pairs = set(state.forbidden_pairs or [])
     selected_bids: List[BidResult] = []
     iterations = 0
 
@@ -156,6 +157,7 @@ def run_mcha_for_plan(
             available_uavs,
             active_targets,
             remaining_demand,
+            forbidden_pairs,
         )
         bids = [bid for bid in bids if bid.score >= min_score]
         if not bids:
@@ -207,9 +209,11 @@ def generate_plan_bids(
     available_uavs: List[int],
     open_targets: List[int],
     remaining_demand: Dict[int, int],
+    forbidden_pairs: set[Tuple[int, int]] | None = None,
 ) -> List[BidResult]:
     """每轮为每架可用 UAV 生成一个链尾追加的当前最优投标。"""
     bids: List[BidResult] = []
+    forbidden_pairs = forbidden_pairs or set()
 
     for uav_id in available_uavs:
         uav = battlefield.get_uav(uav_id)
@@ -217,6 +221,8 @@ def generate_plan_bids(
 
         for target_id in open_targets:
             if remaining_demand.get(target_id, 0) <= 0:
+                continue
+            if (uav_id, target_id) in forbidden_pairs:
                 continue
 
             target = battlefield.get_target(target_id)

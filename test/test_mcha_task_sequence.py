@@ -8,9 +8,11 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from config.params import WEIGHTS, MCHA
+from config.params import WEIGHTS, MCHA, MCHA_TEST
+from data.scenario_reallocation import create_reallocation_scenario
 from src.core.models import AssignmentPlan, Battlefield, Target, TaskNode, Threat, UAV, UavTaskSequence
 from src.core.sequence_eval import evaluate_uav_task_sequence
+from src.pre_allocation.pso import run_pso
 from src.re_allocation.events import Event, EventType, analyze_plan_event_impact, apply_event_to_battlefield
 from src.re_allocation.mcha import run_mcha_for_plan
 
@@ -67,6 +69,15 @@ def assert_plan_feasible(battlefield: Battlefield, plan: AssignmentPlan) -> None
         sequence = plan.uav_task_sequences[uav.id]
         evaluated = evaluate_uav_task_sequence(battlefield, sequence)
         assert_true(evaluated.is_feasible, f'UAV-{uav.id} 任务序列应满足 ammo 和 range 约束')
+
+
+def assert_all_targets_satisfied(battlefield: Battlefield, plan: AssignmentPlan) -> None:
+    for target in battlefield.targets:
+        assigned_count = len(plan.target_assignees.get(target.id, []))
+        assert_true(
+            assigned_count >= target.required_uavs,
+            f'目标{target.id} 应满足需求: assigned={assigned_count}, required={target.required_uavs}',
+        )
 
 
 def test_target_demand_increase_appends_missing_task_to_sequence_plan():
@@ -199,11 +210,126 @@ def test_target_added_supports_required_uavs_greater_than_one():
     assert_true(int(np.sum(assignment[:, 3])) == 2, '兼容矩阵中新增目标应满足 required_uavs=2')
 
 
+def test_threat_added_releases_sequence_suffix_and_repairs_open_tasks():
+    battlefield = build_plan_battlefield()
+    plan = build_initial_plan()
+    event = Event(
+        type=EventType.THREAT_ADDED,
+        data={
+            'threat': Threat(id=0, x=65.0, y=15.0, radius=15.0),
+            'threat_threshold': 1.0,
+        },
+    )
+
+    apply_event_to_battlefield(event, battlefield)
+    state = analyze_plan_event_impact(event, battlefield, plan)
+    result = run_mcha_for_plan(battlefield, WEIGHTS, state, MCHA)
+
+    updated_plan = result.assignment_plan
+    assert_true(state.locked_plan.uav_task_sequences[0].target_ids() == [0], '中间航段受威胁时应保留安全前缀')
+    assert_true(state.open_targets == [1], '受威胁后缀任务应进入开放任务集合')
+    assert_true(state.remaining_demand == {1: 1}, '释放目标1后应产生1个需求缺口')
+    assert_true((0, 1) in (state.forbidden_pairs or []), '受威胁释放的原 UAV-目标组合应加入禁忌集合')
+    assert_true(result.remaining_demand[1] == 0, 'MCHA 应补齐受威胁释放任务')
+    assert_true(0 not in updated_plan.target_assignees[1], '受威胁释放的任务不应直接分回原 UAV')
+    assert_true(len(updated_plan.target_assignees[1]) == 1, '目标1应重新分配给1架 UAV')
+
+    assert_plan_feasible(battlefield, updated_plan)
+    assignment = updated_plan.to_assignment_matrix(num_uavs=3, num_targets=3)
+    assert_true(int(np.sum(assignment[:, 1])) == 1, '兼容矩阵中目标1应满足需求')
+
+
+def test_threat_added_releases_whole_sequence_when_first_segment_affected():
+    battlefield = build_plan_battlefield()
+    plan = build_initial_plan()
+    event = Event(
+        type=EventType.THREAT_ADDED,
+        data={
+            'threat': Threat(id=0, x=30.0, y=0.0, radius=15.0),
+            'threat_threshold': 1.0,
+        },
+    )
+
+    apply_event_to_battlefield(event, battlefield)
+    state = analyze_plan_event_impact(event, battlefield, plan)
+    result = run_mcha_for_plan(battlefield, WEIGHTS, state, MCHA)
+
+    updated_plan = result.assignment_plan
+    assert_true(state.locked_plan.uav_task_sequences[0].target_ids() == [], '首段受威胁时应释放整条任务链')
+    assert_true(state.open_targets == [0, 1], '整链释放后应开放原链上的全部目标')
+    assert_true(state.remaining_demand == {0: 1, 1: 1}, '整链释放后两个目标都应产生需求缺口')
+    assert_true((0, 0) in (state.forbidden_pairs or []), '目标0的原受威胁分配应加入禁忌集合')
+    assert_true((0, 1) in (state.forbidden_pairs or []), '目标1的原受威胁分配应加入禁忌集合')
+    assert_true(result.remaining_demand[0] == 0 and result.remaining_demand[1] == 0, 'MCHA 应补齐整链释放任务')
+
+    for target_id in [0, 1]:
+        assert_true(0 not in updated_plan.target_assignees[target_id], '受威胁释放目标不应分回原 UAV')
+        assert_true(len(updated_plan.target_assignees[target_id]) == 1, f'目标{target_id} 应重新分配给1架 UAV')
+
+    assert_plan_feasible(battlefield, updated_plan)
+
+
+def test_threat_added_noop_when_no_segment_exceeds_threshold():
+    battlefield = build_plan_battlefield()
+    plan = build_initial_plan()
+    event = Event(
+        type=EventType.THREAT_ADDED,
+        data={
+            'threat': Threat(id=0, x=95.0, y=95.0, radius=5.0),
+            'threat_threshold': 1.0,
+        },
+    )
+
+    apply_event_to_battlefield(event, battlefield)
+    state = analyze_plan_event_impact(event, battlefield, plan)
+
+    assert_true(state.locked_plan.uav_task_sequences[0].target_ids() == [0, 1], '无显著威胁时原 UAV-0 任务链应保持不变')
+    assert_true(state.locked_plan.uav_task_sequences[1].target_ids() == [2], '无显著威胁时原 UAV-1 任务链应保持不变')
+    assert_true(state.open_targets == [], '无显著威胁时不应开放任务')
+    assert_true(state.remaining_demand == {}, '无显著威胁时不应产生需求缺口')
+    assert_true(state.forbidden_pairs == [], '无释放任务时禁忌集合应为空')
+
+
+def test_reallocation_scenario_threat_added_keeps_all_targets_satisfied():
+    battlefield = create_reallocation_scenario()
+    np.random.seed(7)
+    _, _, _, plan = run_pso(
+        battlefield,
+        WEIGHTS,
+        return_assignment_plan=True,
+    )
+    event = Event(
+        type=EventType.THREAT_ADDED,
+        data={
+            'threat': Threat(
+                id=MCHA_TEST['new_threat_id'],
+                x=MCHA_TEST['new_threat_x'],
+                y=MCHA_TEST['new_threat_y'],
+                radius=MCHA_TEST['new_threat_radius'],
+            ),
+            'threat_threshold': MCHA_TEST['threat_threshold'],
+        },
+    )
+
+    apply_event_to_battlefield(event, battlefield)
+    state = analyze_plan_event_impact(event, battlefield, plan)
+    result = run_mcha_for_plan(battlefield, WEIGHTS, state, MCHA)
+
+    assert_true(len(state.open_targets) > 0, '重分配场景中的新增威胁应触发任务释放')
+    assert_true(all(value == 0 for value in result.remaining_demand.values()), '新增威胁释放任务应全部被补齐')
+    assert_all_targets_satisfied(battlefield, result.assignment_plan)
+    assert_plan_feasible(battlefield, result.assignment_plan)
+
+
 TEST_CASES = [
     test_target_demand_increase_appends_missing_task_to_sequence_plan,
     test_uav_lost_releases_whole_sequence_and_repairs_open_tasks,
     test_target_added_appends_new_target_to_available_uav_sequence,
     test_target_added_supports_required_uavs_greater_than_one,
+    test_threat_added_releases_sequence_suffix_and_repairs_open_tasks,
+    test_threat_added_releases_whole_sequence_when_first_segment_affected,
+    test_threat_added_noop_when_no_segment_exceeds_threshold,
+    test_reallocation_scenario_threat_added_keeps_all_targets_satisfied,
 ]
 
 
