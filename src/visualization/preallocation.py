@@ -453,3 +453,198 @@ def plot_cooperative_arrival_windows(
         fig.savefig(output_path, dpi=180, bbox_inches='tight')
 
     return fig, ax
+
+
+def plot_initial_population_comparison(
+    random_population: np.ndarray,
+    logistic_population: np.ndarray,
+    title: str,
+    output_path: Optional[str] = None,
+):
+    """绘制随机初始化与 Logistic 混沌初始化的初始种群分布对比。"""
+    vmax = int(max(np.max(random_population), np.max(logistic_population)))
+    vmin = int(min(np.min(random_population), np.min(logistic_population)))
+
+    fig, axes = plt.subplots(1, 2, figsize=(13.0, 5.8), constrained_layout=True)
+    fig.suptitle(title, fontsize=13.5, y=1.02)
+
+    panels = [
+        ('随机初始化', random_population),
+        ('Logistic 混沌初始化', logistic_population),
+    ]
+    images = []
+    for ax, (panel_title, population) in zip(axes, panels):
+        image = ax.imshow(
+            population,
+            aspect='auto',
+            cmap='viridis',
+            vmin=vmin,
+            vmax=vmax,
+            interpolation='nearest',
+        )
+        images.append(image)
+        ax.set_title(panel_title, fontsize=11)
+        ax.set_xlabel('任务槽位')
+        ax.set_ylabel('粒子编号')
+        ax.grid(False)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_alpha(0.55)
+        ax.spines['bottom'].set_alpha(0.55)
+
+    cbar = fig.colorbar(images[-1], ax=axes, fraction=0.035, pad=0.025)
+    cbar.set_label('UAV 编号')
+
+    if output_path is not None:
+        ensure_output_dir(output_path)
+        fig.savefig(output_path, dpi=180, bbox_inches='tight')
+
+    return fig, axes
+
+
+def _curve_group_to_array(curves: list[list[float]] | list[np.ndarray]) -> np.ndarray:
+    if not curves:
+        raise ValueError('curve group must not be empty')
+
+    lengths = {len(curve) for curve in curves}
+    if len(lengths) != 1:
+        raise ValueError('all convergence curves in one group must have the same length')
+
+    return np.asarray(curves, dtype=float)
+
+
+def plot_convergence_ablation(
+    curve_groups: dict[str, list[list[float]] | list[np.ndarray]],
+    title: str,
+    output_path: Optional[str] = None,
+):
+    """绘制四组 PSO 消融实验的平均收敛曲线和标准差阴影。"""
+    colors = ['#4c78a8', '#f58518', '#54a24b', '#d95f5f', '#7f7f7f']
+
+    fig, ax = plt.subplots(figsize=(9.4, 5.8))
+    for index, (label, curves) in enumerate(curve_groups.items()):
+        curve_array = _curve_group_to_array(curves)
+        mean_curve = np.mean(curve_array, axis=0)
+        std_curve = np.std(curve_array, axis=0)
+        iterations = np.arange(len(mean_curve))
+        color = colors[index % len(colors)]
+
+        ax.plot(
+            iterations,
+            mean_curve,
+            label=label,
+            color=color,
+            linewidth=2.0,
+        )
+        ax.fill_between(
+            iterations,
+            mean_curve - std_curve,
+            mean_curve + std_curve,
+            color=color,
+            alpha=0.14,
+            linewidth=0,
+        )
+
+    ax.set_xlabel('迭代次数')
+    ax.set_ylabel('适应度值（越低越好）')
+    ax.set_title(title)
+    ax.grid(True, alpha=0.22, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_alpha(0.6)
+    ax.spines['bottom'].set_alpha(0.6)
+    ax.legend(
+        loc='upper right',
+        frameon=True,
+        framealpha=0.95,
+        edgecolor='#dddddd',
+        fontsize=8.8,
+    )
+    fig.tight_layout()
+
+    if output_path is not None:
+        ensure_output_dir(output_path)
+        fig.savefig(output_path, dpi=180, bbox_inches='tight')
+
+    return fig, ax
+
+
+def plot_final_fitness_ablation(
+    final_fitness_groups: dict[str, list[float] | np.ndarray],
+    title: str,
+    output_path: Optional[str] = None,
+):
+    """绘制最终适应度均值、标准差和各随机种子散点。"""
+    labels = list(final_fitness_groups.keys())
+    values = [np.asarray(final_fitness_groups[label], dtype=float) for label in labels]
+    means = np.array([np.mean(group) for group in values])
+    stds = np.array([np.std(group) for group in values])
+
+    x = np.arange(len(labels))
+    colors = ['#4c78a8', '#f58518', '#54a24b', '#d95f5f', '#7f7f7f']
+
+    fig_width = max(8.8, len(labels) * 1.8)
+    fig, ax = plt.subplots(figsize=(fig_width, 5.4))
+    bars = ax.bar(
+        x,
+        means,
+        yerr=stds,
+        capsize=5,
+        width=0.58,
+        color=[colors[index % len(colors)] for index in range(len(labels))],
+        alpha=0.88,
+        edgecolor='white',
+        linewidth=0.8,
+        label='最终适应度均值 ± 标准差',
+    )
+
+    for index, group in enumerate(values):
+        if len(group) == 1:
+            jitter = np.array([0.0])
+        else:
+            jitter = np.linspace(-0.15, 0.15, len(group))
+        ax.scatter(
+            np.full(len(group), x[index]) + jitter,
+            group,
+            s=38,
+            color='#333333',
+            alpha=0.76,
+            zorder=4,
+            label='单个 seed 结果' if index == 0 else None,
+        )
+
+        ax.text(
+            bars[index].get_x() + bars[index].get_width() / 2.0,
+            means[index] + stds[index] + max(means) * 0.015,
+            f'{means[index]:.2f}',
+            ha='center',
+            va='bottom',
+            fontsize=8.5,
+            color='#333333',
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=12, ha='right')
+    ax.set_ylabel('最终适应度值（越低越好）')
+    ax.set_title(title)
+    ax.grid(True, axis='y', alpha=0.22, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_alpha(0.6)
+    ax.spines['bottom'].set_alpha(0.6)
+    ax.legend(
+        loc='upper right',
+        frameon=True,
+        framealpha=0.95,
+        edgecolor='#dddddd',
+        fontsize=8.8,
+    )
+    fig.tight_layout()
+
+    if output_path is not None:
+        ensure_output_dir(output_path)
+        fig.savefig(output_path, dpi=180, bbox_inches='tight')
+
+    return fig, ax
