@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 from config.params import WEIGHTS
 from src.core.models import AssignmentPlan, Battlefield, Target, Threat, UAV
 from src.core.sequence_eval import evaluate_uav_task_sequence
-from src.pre_allocation.pso import logistic_init, run_pso
+from src.pre_allocation.pso import build_slot_mapping, evaluate_fitness, logistic_init, run_pso
 
 
 def assert_true(condition, message):
@@ -31,6 +31,17 @@ def build_multitask_battlefield() -> Battlefield:
     ]
     threats: list[Threat] = []
     return Battlefield(uavs=uavs, targets=targets, threats=threats, map_size=(100.0, 100.0))
+
+
+def build_sync_window_battlefield(arrival_gap_distance: float) -> Battlefield:
+    uavs = [
+        UAV(id=0, x=0.0, y=0.0, speed=100.0, ammo=1, range_left=300.0),
+        UAV(id=1, x=arrival_gap_distance, y=0.0, speed=100.0, ammo=1, range_left=300.0),
+    ]
+    targets = [
+        Target(id=0, x=0.0, y=0.0, value=10.0, required_uavs=2),
+    ]
+    return Battlefield(uavs=uavs, targets=targets, threats=[], map_size=(120.0, 80.0))
 
 
 def test_logistic_initialization_supports_more_slots_than_uavs_when_ammo_allows():
@@ -95,9 +106,47 @@ def test_run_pso_can_return_assignment_plan_with_multi_task_sequences():
     assert_true(np.array_equal(roundtrip_assignment, assignment), 'AssignmentPlan 应能投影回兼容矩阵')
 
 
+def test_evaluate_fitness_penalizes_cooperative_arrival_outside_sync_window():
+    battlefield = build_sync_window_battlefield(arrival_gap_distance=100.0)
+    _, slot_to_target = build_slot_mapping(battlefield)
+    particle = np.array([0, 1])
+    weights = {
+        'w1': 0.0,
+        'w2': 0.0,
+        'w3': 1.0,
+        'w4': 0.0,
+        'alpha': 1.0,
+        'sync_window': 0.1,
+    }
+
+    fitness = evaluate_fitness(particle, battlefield, weights, slot_to_target)
+
+    assert_true(abs(fitness - 0.5) < 1e-6, '超出同步时间窗时应按到达时间相对均值的平方偏差计入适应度')
+
+
+def test_evaluate_fitness_does_not_penalize_arrival_inside_sync_window():
+    battlefield = build_sync_window_battlefield(arrival_gap_distance=5.0)
+    _, slot_to_target = build_slot_mapping(battlefield)
+    particle = np.array([0, 1])
+    weights = {
+        'w1': 0.0,
+        'w2': 0.0,
+        'w3': 1.0,
+        'w4': 0.0,
+        'alpha': 1.0,
+        'sync_window': 0.1,
+    }
+
+    fitness = evaluate_fitness(particle, battlefield, weights, slot_to_target)
+
+    assert_true(abs(fitness) < 1e-9, '同步时间差未超过窗口时不应产生协同时间窗惩罚')
+
+
 TEST_CASES = [
     test_logistic_initialization_supports_more_slots_than_uavs_when_ammo_allows,
     test_run_pso_can_return_assignment_plan_with_multi_task_sequences,
+    test_evaluate_fitness_penalizes_cooperative_arrival_outside_sync_window,
+    test_evaluate_fitness_does_not_penalize_arrival_inside_sync_window,
 ]
 
 

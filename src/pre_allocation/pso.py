@@ -20,7 +20,7 @@
 import math
 import numpy as np
 from collections import defaultdict
-from typing import Tuple, List
+from typing import Dict, Tuple, List
 from src.core.models import AssignmentPlan, Battlefield
 from src.core.sequence_eval import evaluate_uav_task_sequence
 from config.params import PSO as PSO_PARAMS
@@ -293,6 +293,61 @@ def assignment_plan_to_eta_matrix(battlefield: Battlefield, plan: AssignmentPlan
     return etas
 
 
+def cooperative_time_window_penalty_from_arrivals(
+    target_arrival_times: Dict[int, List[float]],
+    *,
+    alpha: float,
+    sync_window: float,
+) -> float:
+    """
+    计算协同打击时间窗惩罚。
+
+    对同一目标的多架 UAV，若最晚到达时间与最早到达时间之差
+    超过允许同步窗口 sync_window，则按建模中的平方偏差项：
+        sum(alpha * (eta - T_syn)^2)
+    计入惩罚，其中 T_syn 为该目标所有到达时间的平均值。
+    """
+    total = 0.0
+    for arrivals in target_arrival_times.values():
+        if len(arrivals) < 2:
+            continue
+
+        spread = max(arrivals) - min(arrivals)
+        if spread <= sync_window + 1e-12:
+            continue
+
+        t_syn = float(np.mean(arrivals))
+        total += float(sum(alpha * (arrival - t_syn) ** 2 for arrival in arrivals))
+
+    return total
+
+
+def cooperative_time_window_penalty(
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+    *,
+    alpha: float,
+    sync_window: float,
+) -> float:
+    """根据 AssignmentPlan 的任务链累计到达时间计算协同时间窗惩罚。"""
+    target_arrival_times: Dict[int, List[float]] = defaultdict(list)
+
+    for sequence in plan.uav_task_sequences.values():
+        evaluated = evaluate_uav_task_sequence(
+            battlefield,
+            sequence,
+            alpha=alpha,
+        )
+        for task in evaluated.evaluated_sequence.tasks:
+            target_arrival_times[task.target_id].append(task.planned_arrival_time)
+
+    return cooperative_time_window_penalty_from_arrivals(
+        target_arrival_times,
+        alpha=alpha,
+        sync_window=sync_window,
+    )
+
+
 # ============================================================
 # 适应度评估（含惩罚函数）
 # ============================================================
@@ -327,6 +382,7 @@ def evaluate_fitness(particle: np.ndarray, battlefield: Battlefield,
     time_window_penalty = 0.0
     task_reward = 0.0
     constraint_penalty = 0.0
+    target_arrival_times: Dict[int, List[float]] = defaultdict(list)
 
     assigned_target_ids = set()
     for sequence in plan.uav_task_sequences.values():
@@ -338,6 +394,8 @@ def evaluate_fitness(particle: np.ndarray, battlefield: Battlefield,
         )
         distance_cost += evaluated.total_distance
         time_window_penalty += evaluated.time_window_penalty
+        for evaluated_task in evaluated.evaluated_sequence.tasks:
+            target_arrival_times[evaluated_task.target_id].append(evaluated_task.planned_arrival_time)
 
         if not evaluated.is_ammo_feasible:
             constraint_penalty += PENALTY * (sequence.task_count() - uav.ammo)
@@ -368,6 +426,12 @@ def evaluate_fitness(particle: np.ndarray, battlefield: Battlefield,
         if actual < target.required_uavs:
             # 不足的无人机数量越多，惩罚越大
             constraint_penalty += PENALTY * (target.required_uavs - actual)
+
+    time_window_penalty += cooperative_time_window_penalty_from_arrivals(
+        target_arrival_times,
+        alpha=weights['alpha'],
+        sync_window=weights.get('sync_window', 0.05),
+    )
 
     return (
         weights['w1'] * distance_cost
