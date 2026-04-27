@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.core.models import AssignmentPlan, Battlefield, UavTaskSequence
+from src.core.sequence_eval import evaluate_uav_task_sequence
 from src.visualization.common import ensure_output_dir
 
 
@@ -274,6 +275,176 @@ def plot_target_loads(
         framealpha=0.95,
         edgecolor='#dddddd',
         fontsize=9,
+    )
+    fig.tight_layout()
+
+    if output_path is not None:
+        ensure_output_dir(output_path)
+        fig.savefig(output_path, dpi=180, bbox_inches='tight')
+
+    return fig, ax
+
+
+def collect_target_arrivals(
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+) -> dict[int, list[tuple[int, float]]]:
+    """收集 AssignmentPlan 中每个目标的 UAV 累计到达时间。"""
+    target_arrivals: dict[int, list[tuple[int, float]]] = {}
+
+    for sequence in plan.uav_task_sequences.values():
+        evaluated = evaluate_uav_task_sequence(battlefield, sequence)
+        for task in evaluated.evaluated_sequence.tasks:
+            target_arrivals.setdefault(task.target_id, []).append(
+                (sequence.uav_id, task.planned_arrival_time)
+            )
+
+    for arrivals in target_arrivals.values():
+        arrivals.sort(key=lambda item: item[1])
+    return target_arrivals
+
+
+def plot_cooperative_arrival_windows(
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+    title: str,
+    output_path: Optional[str] = None,
+    sync_window: float = 0.05,
+):
+    """绘制多 UAV 协同打击目标的到达时间窗图。"""
+    time_scale = 60.0
+    time_unit = 'min'
+    sync_window_display = sync_window * time_scale
+    target_arrivals = collect_target_arrivals(battlefield, plan)
+    cooperative_items = [
+        (target_id, arrivals)
+        for target_id, arrivals in sorted(target_arrivals.items())
+        if len(arrivals) >= 2
+    ]
+
+    fig_height = max(3.2, 0.72 * max(1, len(cooperative_items)) + 1.9)
+    fig, ax = plt.subplots(figsize=(9.6, fig_height))
+
+    if not cooperative_items:
+        ax.text(
+            0.5,
+            0.5,
+            '当前预分配结果中无多 UAV 协同打击目标',
+            transform=ax.transAxes,
+            ha='center',
+            va='center',
+            fontsize=11,
+            color='#555555',
+        )
+        ax.set_axis_off()
+        if output_path is not None:
+            ensure_output_dir(output_path)
+            fig.savefig(output_path, dpi=180, bbox_inches='tight')
+        return fig, ax
+
+    y_positions = np.arange(len(cooperative_items))
+    max_delta = 0.0
+    all_times: list[float] = []
+    satisfied_count = 0
+
+    for y, (target_id, arrivals) in zip(y_positions, cooperative_items):
+        arrival_times = [arrival_time * time_scale for _, arrival_time in arrivals]
+        min_eta = min(arrival_times)
+        max_eta = max(arrival_times)
+        t_syn = float(np.mean(arrival_times))
+        delta_t = max_eta - min_eta
+        satisfied = delta_t <= sync_window_display + 1e-12
+        if satisfied:
+            satisfied_count += 1
+        max_delta = max(max_delta, delta_t)
+        all_times.extend(arrival_times)
+
+        band_color = '#d8e9f7' if satisfied else '#f7d8d8'
+        point_color = '#2f5f8f' if satisfied else '#b33a3a'
+        line_color = '#36566f' if satisfied else '#8f2f2f'
+
+        ax.broken_barh(
+            [(min_eta, sync_window_display)],
+            (y - 0.23, 0.46),
+            facecolors=band_color,
+            edgecolors='none',
+            alpha=0.92,
+            label='同步时间窗' if y == 0 else None,
+        )
+        ax.vlines(
+            t_syn,
+            y - 0.28,
+            y + 0.28,
+            colors=line_color,
+            linestyles='--',
+            linewidth=1.35,
+            label='同步基准时刻' if y == 0 else None,
+        )
+
+        for uav_id, arrival_time_hour in arrivals:
+            arrival_time = arrival_time_hour * time_scale
+            ax.scatter(
+                arrival_time,
+                y,
+                s=48,
+                color=point_color,
+                edgecolors='white',
+                linewidths=0.8,
+                zorder=4,
+                label='UAV 到达时间' if y == 0 and arrival_time == arrival_times[0] else None,
+            )
+            ax.annotate(
+                f'U{uav_id}',
+                (arrival_time, y),
+                textcoords='offset points',
+                xytext=(4, 5),
+                fontsize=8,
+                color=point_color,
+            )
+
+        ax.text(
+            max_eta + max(sync_window_display * 0.18, 0.36),
+            y,
+            f'Δt={delta_t:.1f}{time_unit}',
+            ha='left',
+            va='center',
+            fontsize=8.5,
+            color=point_color,
+        )
+
+    satisfied_rate = satisfied_count / len(cooperative_items)
+    margin = max(sync_window_display * 0.8, max_delta * 0.5, 1.8)
+    ax.set_xlim(min(all_times) - margin, max(all_times) + sync_window_display + margin)
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels([f'T{target_id}' for target_id, _ in cooperative_items])
+    ax.invert_yaxis()
+    ax.set_xlabel(f'预计到达时间 ETA ({time_unit})')
+    ax.set_ylabel('协同打击目标')
+    ax.set_title(title)
+    ax.grid(True, axis='x', alpha=0.22, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_alpha(0.6)
+    ax.spines['bottom'].set_alpha(0.6)
+    ax.text(
+        0.99,
+        0.94,
+        f'同步窗口 {sync_window_display:.1f} {time_unit} | 满足率 {satisfied_rate:.0%}',
+        transform=ax.transAxes,
+        ha='right',
+        va='top',
+        fontsize=9.2,
+        color='#2f5f8f' if satisfied_rate == 1.0 else '#9c2f2f',
+        bbox={'boxstyle': 'round,pad=0.32', 'facecolor': 'white', 'edgecolor': '#dddddd', 'alpha': 0.96},
+    )
+    ax.legend(
+        loc='lower right',
+        ncol=3,
+        frameon=True,
+        framealpha=0.95,
+        edgecolor='#dddddd',
+        fontsize=8.5,
     )
     fig.tight_layout()
 

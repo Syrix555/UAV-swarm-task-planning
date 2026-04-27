@@ -15,7 +15,11 @@ from data.scenario_hard import create_hard_scenario
 from data.scenario_medium import create_medium_scenario
 from data.scenario_small import create_small_scenario
 from src.pre_allocation.pso import run_pso
-from src.visualization.preallocation import plot_target_loads, plot_task_sequence_assignment_map
+from src.visualization.preallocation import (
+    plot_cooperative_arrival_windows,
+    plot_target_loads,
+    plot_task_sequence_assignment_map,
+)
 
 
 RESULT_DIR = 'results/pre_allocation'
@@ -63,10 +67,20 @@ def main():
         output_path=target_loads_output_path,
     )
 
+    cooperative_output_path = os.path.join(RESULT_DIR, f'{scenario_name}_cooperative_arrival_windows.png')
+    plot_cooperative_arrival_windows(
+        battlefield,
+        plan,
+        title=f'多无人机协同打击到达时间分布图（{scenario_name}, seed={seed}）',
+        output_path=cooperative_output_path,
+        sync_window=WEIGHTS.get('sync_window', 0.05),
+    )
+
     print(f'最终适应度: {curve[-1]:.4f}')
     print('图表已保存到:')
     print(f'- {sequence_output_path}')
     print(f'- {target_loads_output_path}')
+    print(f'- {cooperative_output_path}')
     plt.show()
 
 

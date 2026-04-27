@@ -12,7 +12,11 @@ matplotlib.use('Agg')
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 from src.core.models import AssignmentPlan, Battlefield, Target, Threat, UAV, UavTaskSequence
-from src.visualization.preallocation import plot_target_loads, plot_task_sequence_assignment_map
+from src.visualization.preallocation import (
+    plot_cooperative_arrival_windows,
+    plot_target_loads,
+    plot_task_sequence_assignment_map,
+)
 
 
 def assert_true(condition, message):
@@ -26,7 +30,7 @@ def build_visualization_battlefield() -> Battlefield:
         UAV(id=1, x=0.0, y=40.0, speed=100.0, ammo=2, range_left=300.0),
     ]
     targets = [
-        Target(id=0, x=40.0, y=0.0, value=10.0, required_uavs=1),
+        Target(id=0, x=40.0, y=0.0, value=10.0, required_uavs=2),
         Target(id=1, x=60.0, y=20.0, value=9.0, required_uavs=1),
         Target(id=2, x=45.0, y=45.0, value=8.0, required_uavs=1),
     ]
@@ -38,9 +42,10 @@ def build_visualization_plan() -> AssignmentPlan:
     plan = AssignmentPlan.empty([0, 1])
     plan.uav_task_sequences[0].append_target(0)
     plan.uav_task_sequences[0].append_target(1)
+    plan.uav_task_sequences[1].append_target(0)
     plan.uav_task_sequences[1].append_target(2)
     plan.target_assignees = {
-        0: [0],
+        0: [0, 1],
         1: [0],
         2: [1],
     }
@@ -86,7 +91,29 @@ def test_plot_target_loads_saves_file():
         fig.clf()
 
 
+def test_plot_cooperative_arrival_windows_saves_file():
+    battlefield = build_visualization_battlefield()
+    plan = build_visualization_plan()
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        output_path = os.path.join(tmp_dir, 'cooperative_arrival_windows.png')
+        fig, ax = plot_cooperative_arrival_windows(
+            battlefield,
+            plan,
+            title='协同打击到达时间窗',
+            output_path=output_path,
+            sync_window=0.2,
+        )
+
+        assert_true(os.path.exists(output_path), '协同到达时间窗图应保存到指定路径')
+        assert_true(os.path.getsize(output_path) > 0, '输出图片文件不应为空')
+        assert_true(len(ax.collections) >= 1, '协同到达时间窗图应绘制 UAV 到达时间点')
+        assert_true(len(ax.collections) >= 2, '协同到达时间窗图应绘制同步时间窗区域和 UAV 到达时间点')
+        fig.clf()
+
+
 if __name__ == '__main__':
     test_plot_task_sequence_assignment_map_saves_file()
     test_plot_target_loads_saves_file()
-    print('通过 2 项预分配任务序列可视化测试')
+    test_plot_cooperative_arrival_windows_saves_file()
+    print('通过 3 项预分配任务序列可视化测试')
