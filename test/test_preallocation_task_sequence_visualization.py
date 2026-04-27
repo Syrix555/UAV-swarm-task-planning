@@ -13,9 +13,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 from src.core.models import AssignmentPlan, Battlefield, Target, Threat, UAV, UavTaskSequence
 from src.visualization.preallocation import (
+    collect_preallocation_metrics,
     plot_cooperative_arrival_windows,
+    plot_preallocation_metrics_table,
     plot_target_loads,
     plot_task_sequence_assignment_map,
+    plot_uav_task_loads,
 )
 
 
@@ -112,8 +115,78 @@ def test_plot_cooperative_arrival_windows_saves_file():
         fig.clf()
 
 
+def test_collect_preallocation_metrics_returns_expected_values():
+    battlefield = build_visualization_battlefield()
+    plan = build_visualization_plan()
+
+    metrics = collect_preallocation_metrics(
+        battlefield,
+        plan,
+        final_fitness=123.45,
+        sync_window=0.2,
+    )
+
+    assert_true(metrics['uav_count'] == 2, '综合指标应统计 UAV 总数')
+    assert_true(metrics['target_count'] == 3, '综合指标应统计目标总数')
+    assert_true(metrics['assigned_task_count'] == 4, '综合指标应统计任务槽分配数量')
+    assert_true(metrics['required_task_count'] == 4, '综合指标应统计目标需求总数')
+    assert_true(metrics['target_satisfaction_rate'] == 1.0, '当前测试计划应满足全部目标需求')
+    assert_true(metrics['max_task_chain_length'] == 2, '当前测试计划最大任务链长度应为 2')
+    assert_true(metrics['final_fitness'] == 123.45, '综合指标应保留最终适应度')
+
+
+def test_plot_uav_task_loads_saves_file():
+    battlefield = build_visualization_battlefield()
+    plan = build_visualization_plan()
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        output_path = os.path.join(tmp_dir, 'uav_task_loads.png')
+        fig, ax = plot_uav_task_loads(
+            battlefield,
+            plan,
+            title='UAV 任务负载情况',
+            output_path=output_path,
+        )
+
+        assert_true(os.path.exists(output_path), 'UAV 任务负载图应保存到指定路径')
+        assert_true(os.path.getsize(output_path) > 0, '输出图片文件不应为空')
+        assert_true(len(ax.patches) >= len(battlefield.uavs), '任务负载图应为每架 UAV 绘制任务数量柱')
+        fig.clf()
+
+
+def test_plot_preallocation_metrics_table_saves_file_and_csv():
+    battlefield = build_visualization_battlefield()
+    plan = build_visualization_plan()
+    metrics = collect_preallocation_metrics(
+        battlefield,
+        plan,
+        final_fitness=123.45,
+        sync_window=0.2,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        output_path = os.path.join(tmp_dir, 'preallocation_metrics.png')
+        csv_output_path = os.path.join(tmp_dir, 'preallocation_metrics.csv')
+        fig, ax = plot_preallocation_metrics_table(
+            metrics,
+            title='预分配综合指标',
+            output_path=output_path,
+            csv_output_path=csv_output_path,
+        )
+
+        assert_true(os.path.exists(output_path), '预分配综合指标表图应保存到指定路径')
+        assert_true(os.path.getsize(output_path) > 0, '输出图片文件不应为空')
+        assert_true(os.path.exists(csv_output_path), '预分配综合指标 CSV 应保存到指定路径')
+        assert_true(os.path.getsize(csv_output_path) > 0, '输出 CSV 文件不应为空')
+        assert_true(not ax.axison, '综合指标表图应隐藏普通坐标轴')
+        fig.clf()
+
+
 if __name__ == '__main__':
     test_plot_task_sequence_assignment_map_saves_file()
     test_plot_target_loads_saves_file()
     test_plot_cooperative_arrival_windows_saves_file()
-    print('通过 3 项预分配任务序列可视化测试')
+    test_collect_preallocation_metrics_returns_expected_values()
+    test_plot_uav_task_loads_saves_file()
+    test_plot_preallocation_metrics_table_saves_file_and_csv()
+    print('通过 6 项预分配任务序列可视化测试')

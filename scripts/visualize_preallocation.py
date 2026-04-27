@@ -16,9 +16,12 @@ from data.scenario_medium import create_medium_scenario
 from data.scenario_small import create_small_scenario
 from src.pre_allocation.pso import run_pso
 from src.visualization.preallocation import (
+    collect_preallocation_metrics,
     plot_cooperative_arrival_windows,
+    plot_preallocation_metrics_table,
     plot_target_loads,
     plot_task_sequence_assignment_map,
+    plot_uav_task_loads,
 )
 
 
@@ -76,11 +79,38 @@ def main():
         sync_window=WEIGHTS.get('sync_window', 0.05),
     )
 
+    uav_loads_output_path = os.path.join(RESULT_DIR, f'{scenario_name}_uav_task_loads.png')
+    plot_uav_task_loads(
+        battlefield,
+        plan,
+        title=f'UAV 任务负载情况（{scenario_name}, seed={seed}）',
+        output_path=uav_loads_output_path,
+    )
+
+    metrics = collect_preallocation_metrics(
+        battlefield,
+        plan,
+        final_fitness=float(curve[-1]),
+        sync_window=WEIGHTS.get('sync_window', 0.05),
+        alpha=WEIGHTS.get('alpha', 1.0),
+    )
+    metrics_output_path = os.path.join(RESULT_DIR, f'{scenario_name}_preallocation_metrics.png')
+    metrics_csv_output_path = os.path.join(RESULT_DIR, f'{scenario_name}_preallocation_metrics.csv')
+    plot_preallocation_metrics_table(
+        metrics,
+        title=f'预分配综合指标（{scenario_name}, seed={seed}）',
+        output_path=metrics_output_path,
+        csv_output_path=metrics_csv_output_path,
+    )
+
     print(f'最终适应度: {curve[-1]:.4f}')
     print('图表已保存到:')
     print(f'- {sequence_output_path}')
     print(f'- {target_loads_output_path}')
     print(f'- {cooperative_output_path}')
+    print(f'- {uav_loads_output_path}')
+    print(f'- {metrics_output_path}')
+    print(f'- {metrics_csv_output_path}')
     plt.show()
 
 

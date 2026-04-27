@@ -1,3 +1,4 @@
+import csv
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -302,6 +303,317 @@ def collect_target_arrivals(
     for arrivals in target_arrivals.values():
         arrivals.sort(key=lambda item: item[1])
     return target_arrivals
+
+
+def collect_preallocation_metrics(
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+    *,
+    final_fitness: float | None = None,
+    sync_window: float = 0.05,
+    alpha: float = 1.0,
+) -> dict[str, float | int]:
+    """汇总预分配结果的论文展示指标。"""
+    total_distance = 0.0
+    total_travel_time = 0.0
+    explicit_time_window_penalty = 0.0
+    threat_cost = 0.0
+    assigned_target_ids: set[int] = set()
+
+    for sequence in plan.uav_task_sequences.values():
+        uav = battlefield.get_uav(sequence.uav_id)
+        evaluated = evaluate_uav_task_sequence(
+            battlefield,
+            sequence,
+            alpha=alpha,
+        )
+        total_distance += evaluated.total_distance
+        total_travel_time += evaluated.total_travel_time
+        explicit_time_window_penalty += evaluated.time_window_penalty
+
+        current_x, current_y = uav.x, uav.y
+        for task in sequence.tasks:
+            target = battlefield.get_target(task.target_id)
+            threat_cost += battlefield.threat_cost_on_line(
+                current_x,
+                current_y,
+                target.x,
+                target.y,
+            )
+            current_x, current_y = target.x, target.y
+            assigned_target_ids.add(task.target_id)
+
+    target_satisfied_count = 0
+    for target in battlefield.targets:
+        assigned_count = len(plan.target_assignees.get(target.id, []))
+        if assigned_count >= target.required_uavs:
+            target_satisfied_count += 1
+
+    task_counts = [
+        plan.uav_task_sequences.get(uav.id, UavTaskSequence(uav.id)).task_count()
+        for uav in battlefield.uavs
+    ]
+    assigned_task_count = int(sum(task_counts))
+    active_uav_count = int(sum(1 for count in task_counts if count > 0))
+    required_task_count = int(sum(target.required_uavs for target in battlefield.targets))
+    target_count = len(battlefield.targets)
+
+    target_arrivals = collect_target_arrivals(battlefield, plan)
+    cooperative_targets = [
+        arrivals for arrivals in target_arrivals.values()
+        if len(arrivals) >= 2
+    ]
+    sync_violation_count = 0
+    max_sync_gap = 0.0
+    for arrivals in cooperative_targets:
+        arrival_times = [arrival_time for _, arrival_time in arrivals]
+        gap = max(arrival_times) - min(arrival_times)
+        max_sync_gap = max(max_sync_gap, gap)
+        if gap > sync_window + 1e-12:
+            sync_violation_count += 1
+
+    sync_satisfied_rate = (
+        1.0 - sync_violation_count / len(cooperative_targets)
+        if cooperative_targets else 1.0
+    )
+
+    total_target_value = float(
+        sum(battlefield.get_target(target_id).value for target_id in assigned_target_ids)
+    )
+
+    metrics: dict[str, float | int] = {
+        'uav_count': len(battlefield.uavs),
+        'target_count': target_count,
+        'active_uav_count': active_uav_count,
+        'assigned_task_count': assigned_task_count,
+        'required_task_count': required_task_count,
+        'target_satisfied_count': target_satisfied_count,
+        'target_satisfaction_rate': target_satisfied_count / target_count if target_count else 0.0,
+        'average_tasks_per_uav': assigned_task_count / len(battlefield.uavs) if battlefield.uavs else 0.0,
+        'average_tasks_per_active_uav': assigned_task_count / active_uav_count if active_uav_count else 0.0,
+        'max_task_chain_length': max(task_counts, default=0),
+        'total_distance': float(total_distance),
+        'total_travel_time': float(total_travel_time),
+        'threat_cost': float(threat_cost),
+        'explicit_time_window_penalty': float(explicit_time_window_penalty),
+        'cooperative_target_count': len(cooperative_targets),
+        'sync_violation_count': sync_violation_count,
+        'sync_satisfied_rate': float(sync_satisfied_rate),
+        'max_sync_gap': float(max_sync_gap),
+        'total_target_value': total_target_value,
+    }
+    if final_fitness is not None:
+        metrics['final_fitness'] = float(final_fitness)
+    elif plan.total_cost:
+        metrics['final_fitness'] = float(plan.total_cost)
+    else:
+        metrics['final_fitness'] = 0.0
+
+    return metrics
+
+
+def plot_uav_task_loads(
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+    title: str,
+    output_path: Optional[str] = None,
+):
+    """绘制每架 UAV 的任务链长度与 ammo 容量对比。"""
+    uav_ids = [uav.id for uav in battlefield.uavs]
+    task_counts = [
+        plan.uav_task_sequences.get(uav.id, UavTaskSequence(uav.id)).task_count()
+        for uav in battlefield.uavs
+    ]
+    ammo_limits = [uav.ammo for uav in battlefield.uavs]
+    active_count = sum(1 for count in task_counts if count > 0)
+    avg_load = float(np.mean(task_counts)) if task_counts else 0.0
+    max_load = max(task_counts, default=0)
+
+    x = np.arange(len(uav_ids))
+    bar_colors = [
+        '#c44e52' if count > ammo else '#5b8cc0'
+        for count, ammo in zip(task_counts, ammo_limits)
+    ]
+
+    fig_width = max(8.8, len(uav_ids) * 0.58)
+    fig, ax = plt.subplots(figsize=(fig_width, 4.9))
+    bars = ax.bar(
+        x,
+        task_counts,
+        width=0.58,
+        color=bar_colors,
+        alpha=0.92,
+        edgecolor='white',
+        linewidth=0.7,
+        label='任务链长度',
+    )
+    ax.scatter(
+        x,
+        ammo_limits,
+        color='#f58518',
+        marker='D',
+        s=30,
+        zorder=4,
+        label='ammo 容量',
+    )
+    for idx, ammo in enumerate(ammo_limits):
+        ax.hlines(
+            ammo,
+            idx - 0.32,
+            idx + 0.32,
+            colors='#f58518',
+            linewidth=1.2,
+            alpha=0.72,
+            zorder=3,
+        )
+
+    for bar, count in zip(bars, task_counts):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            count + 0.05,
+            str(count),
+            ha='center',
+            va='bottom',
+            fontsize=8,
+            color='#333333',
+        )
+
+    ax.text(
+        0.99,
+        0.93,
+        f'活跃 UAV {active_count}/{len(uav_ids)} | 平均任务 {avg_load:.2f} | 最大链长 {max_load}',
+        transform=ax.transAxes,
+        ha='right',
+        va='top',
+        fontsize=9.2,
+        color='#2f5f8f',
+        bbox={'boxstyle': 'round,pad=0.32', 'facecolor': 'white', 'edgecolor': '#dddddd', 'alpha': 0.96},
+    )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'U{uav_id}' for uav_id in uav_ids], rotation=0)
+    ax.set_xlabel('UAV 编号')
+    ax.set_ylabel('任务数量')
+    ax.set_title(title)
+    ax.set_ylim(0, max(max(task_counts, default=0), max(ammo_limits, default=0)) + 0.9)
+    ax.grid(True, axis='y', alpha=0.18, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_alpha(0.6)
+    ax.spines['bottom'].set_alpha(0.6)
+    ax.legend(
+        loc='upper left',
+        ncol=2,
+        frameon=True,
+        framealpha=0.95,
+        edgecolor='#dddddd',
+        fontsize=8.8,
+    )
+    fig.tight_layout()
+
+    if output_path is not None:
+        ensure_output_dir(output_path)
+        fig.savefig(output_path, dpi=180, bbox_inches='tight')
+
+    return fig, ax
+
+
+def _format_metric_value(key: str, value: float | int) -> str:
+    if key.endswith('_rate'):
+        return f'{float(value):.1%}'
+    if key in {'total_travel_time', 'max_sync_gap'}:
+        return f'{float(value) * 60.0:.2f} min'
+    if isinstance(value, int):
+        return str(value)
+    return f'{float(value):.3f}'
+
+
+def _write_metrics_csv(metrics: dict[str, float | int], output_path: str) -> None:
+    ensure_output_dir(output_path)
+    with open(output_path, 'w', newline='', encoding='utf-8-sig') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(['指标', '数值'])
+        for key, label in _METRIC_TABLE_ITEMS:
+            if key in metrics:
+                writer.writerow([label, _format_metric_value(key, metrics[key])])
+
+
+_METRIC_TABLE_ITEMS = [
+    ('uav_count', 'UAV 总数'),
+    ('target_count', '目标总数'),
+    ('active_uav_count', '活跃 UAV 数'),
+    ('assigned_task_count', '已分配任务槽数'),
+    ('required_task_count', '目标需求任务槽数'),
+    ('target_satisfied_count', '满足需求目标数'),
+    ('target_satisfaction_rate', '目标满足率'),
+    ('average_tasks_per_uav', '单机平均任务数'),
+    ('average_tasks_per_active_uav', '活跃单机平均任务数'),
+    ('max_task_chain_length', '最大任务链长度'),
+    ('total_distance', '任务链总航程 km'),
+    ('total_travel_time', '任务链总飞行时间'),
+    ('threat_cost', '威胁代价'),
+    ('cooperative_target_count', '协同打击目标数'),
+    ('sync_violation_count', '同步窗口超限目标数'),
+    ('sync_satisfied_rate', '同步窗口满足率'),
+    ('max_sync_gap', '最大协同到达间隔'),
+    ('total_target_value', '覆盖目标总价值'),
+    ('final_fitness', '最终适应度'),
+]
+
+
+def plot_preallocation_metrics_table(
+    metrics: dict[str, float | int],
+    title: str,
+    output_path: Optional[str] = None,
+    csv_output_path: Optional[str] = None,
+):
+    """绘制预分配综合指标表，并可同步导出 CSV。"""
+    table_rows = [
+        [label, _format_metric_value(key, metrics[key])]
+        for key, label in _METRIC_TABLE_ITEMS
+        if key in metrics
+    ]
+
+    fig_height = max(4.8, 0.33 * len(table_rows) + 1.3)
+    fig, ax = plt.subplots(figsize=(8.2, fig_height))
+    ax.set_axis_off()
+    ax.set_title(title, fontsize=13, pad=12)
+
+    table = ax.table(
+        cellText=table_rows,
+        colLabels=['指标', '数值'],
+        loc='center',
+        cellLoc='center',
+        colLoc='center',
+        colWidths=[0.58, 0.32],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(9.2)
+    table.scale(1.0, 1.26)
+
+    for (row, col), cell in table.get_celld().items():
+        cell.set_edgecolor('#d9d9d9')
+        cell.set_linewidth(0.6)
+        if row == 0:
+            cell.set_facecolor('#e9f1f7')
+            cell.set_text_props(weight='bold', color='#24445c')
+        elif row % 2 == 0:
+            cell.set_facecolor('#f7f9fb')
+        else:
+            cell.set_facecolor('white')
+        if col == 0 and row > 0:
+            cell.set_text_props(ha='left')
+
+    fig.tight_layout()
+
+    if output_path is not None:
+        ensure_output_dir(output_path)
+        fig.savefig(output_path, dpi=180, bbox_inches='tight')
+    if csv_output_path is not None:
+        _write_metrics_csv(metrics, csv_output_path)
+
+    return fig, ax
 
 
 def plot_cooperative_arrival_windows(
