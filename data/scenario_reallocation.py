@@ -1,4 +1,4 @@
-"""中规模任务序列重分配测试场景：9架无人机、18个目标、5个威胁区"""
+"""中规模任务序列重分配测试场景：9架无人机、18个目标、3个威胁区"""
 from src.core.models import UAV, Target, Threat, Battlefield
 from config.params import UAV_MAX_RANGE, UAV_MAX_AMMO, UAV_SPEED, MAP_SIZE
 
@@ -10,7 +10,7 @@ def create_reallocation_scenario() -> Battlefield:
     设计原则：
     1. 目标总需求为22，低于9架无人机的总 ammo 容量27，保留一定冗余能力
     2. 无人机数量少于目标数量，每架无人机可承担多个任务点，体现任务序列重分配
-    3. 威胁区分布在中部与右侧通道，便于测试威胁变化触发重分配
+    3. 基础威胁区保持分散，避免后续航迹规划阶段形成不可通行屏障
     """
     uavs = [
         UAV(id=i, x=10, y=10 + i * 9, speed=UAV_SPEED,
@@ -40,11 +40,9 @@ def create_reallocation_scenario() -> Battlefield:
     ]
 
     threats = [
-        Threat(id=0, x=38, y=20, radius=11.0),
-        Threat(id=1, x=52, y=34, radius=10.0),
-        Threat(id=2, x=46, y=54, radius=13.0),
-        Threat(id=3, x=60, y=74, radius=11.0),
-        Threat(id=4, x=50, y=88, radius=12.0),
+        Threat(id=0, x=36, y=24, radius=9.0),
+        Threat(id=1, x=50, y=40, radius=10.0),
+        Threat(id=2, x=58, y=84, radius=9.5),
     ]
 
     return Battlefield(uavs, targets, threats, MAP_SIZE)

@@ -18,6 +18,17 @@ class BidResult:
 
 
 @dataclass
+class BidRoundLog:
+    """MCHA 单轮候选投标与中标记录。"""
+
+    iteration: int
+    active_targets: List[int]
+    available_uavs: List[int]
+    candidate_bids: List[BidResult]
+    accepted_bids: List[BidResult]
+
+
+@dataclass
 class MCHAResult:
     """MCHA重分配结果。"""
 
@@ -38,6 +49,7 @@ class PlanMCHAResult:
     selected_bids: List[BidResult]
     remaining_demand: Dict[int, int]
     iterations: int
+    bid_round_logs: List[BidRoundLog]
 
 
 def run_mcha(
@@ -138,6 +150,7 @@ def run_mcha_for_plan(
     remaining_demand = dict(state.remaining_demand)
     forbidden_pairs = set(state.forbidden_pairs or [])
     selected_bids: List[BidResult] = []
+    bid_round_logs: List[BidRoundLog] = []
     iterations = 0
 
     for iteration in range(max_iter):
@@ -166,6 +179,16 @@ def run_mcha_for_plan(
         accepted_bids, _ = resolve_bids(bids, remaining_demand)
         if not accepted_bids:
             break
+
+        bid_round_logs.append(
+            BidRoundLog(
+                iteration=iterations,
+                active_targets=list(active_targets),
+                available_uavs=list(available_uavs),
+                candidate_bids=list(bids),
+                accepted_bids=list(accepted_bids),
+            )
+        )
 
         current_plan = apply_bids_to_plan(current_plan, accepted_bids)
         selected_bids.extend(accepted_bids)
@@ -199,6 +222,7 @@ def run_mcha_for_plan(
         selected_bids=selected_bids,
         remaining_demand=remaining_demand,
         iterations=iterations,
+        bid_round_logs=bid_round_logs,
     )
 
 

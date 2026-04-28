@@ -41,7 +41,7 @@ MCHA_TEST = {
     'threat_threshold': 1.0,
     'new_threat_id': 99,
     'new_threat_x': 48.0,
-    'new_threat_y': 68.0,
+    'new_threat_y': 63.0,
     'new_threat_radius': 12.0,
     'target_added_id': 18,
     'target_added_x': 84.0,
