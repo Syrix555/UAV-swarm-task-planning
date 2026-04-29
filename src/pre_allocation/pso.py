@@ -348,6 +348,29 @@ def cooperative_time_window_penalty(
     )
 
 
+def _objective_terms(
+    distance_cost: float,
+    threat_cost: float,
+    time_window_penalty: float,
+    task_reward: float,
+    weights: dict,
+) -> tuple[float, float, float, float]:
+    """根据权重配置计算目标函数四个加权项，可选启用归一化。"""
+    objective_refs = weights.get('objective_refs')
+    if objective_refs:
+        distance_cost = distance_cost / max(float(objective_refs['distance_ref']), 1e-12)
+        threat_cost = threat_cost / max(float(objective_refs['threat_ref']), 1e-12)
+        time_window_penalty = time_window_penalty / max(float(objective_refs['time_window_ref']), 1e-12)
+        task_reward = task_reward / max(float(objective_refs['reward_ref']), 1e-12)
+
+    return (
+        weights['w1'] * distance_cost,
+        weights['w2'] * threat_cost,
+        weights['w3'] * time_window_penalty,
+        -weights['w4'] * task_reward,
+    )
+
+
 # ============================================================
 # 适应度评估（含惩罚函数）
 # ============================================================
@@ -433,13 +456,14 @@ def evaluate_fitness(particle: np.ndarray, battlefield: Battlefield,
         sync_window=weights.get('sync_window', 0.05),
     )
 
-    return (
-        weights['w1'] * distance_cost
-        + weights['w2'] * threat_cost
-        + weights['w3'] * time_window_penalty
-        + constraint_penalty
-        - weights['w4'] * task_reward
+    objective_terms = _objective_terms(
+        distance_cost,
+        threat_cost,
+        time_window_penalty,
+        task_reward,
+        weights,
     )
+    return sum(objective_terms) + constraint_penalty
 
 
 # ============================================================

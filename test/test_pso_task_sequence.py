@@ -142,11 +142,36 @@ def test_evaluate_fitness_does_not_penalize_arrival_inside_sync_window():
     assert_true(abs(fitness) < 1e-9, '同步时间差未超过窗口时不应产生协同时间窗惩罚')
 
 
+def test_evaluate_fitness_supports_normalized_objective_refs():
+    battlefield = build_sync_window_battlefield(arrival_gap_distance=100.0)
+    _, slot_to_target = build_slot_mapping(battlefield)
+    particle = np.array([0, 1])
+    weights = {
+        'w1': 1.0,
+        'w2': 0.0,
+        'w3': 1.0,
+        'w4': 0.0,
+        'alpha': 1.0,
+        'sync_window': 0.1,
+        'objective_refs': {
+            'distance_ref': 200.0,
+            'threat_ref': 1.0,
+            'time_window_ref': 0.5,
+            'reward_ref': 1.0,
+        },
+    }
+
+    fitness = evaluate_fitness(particle, battlefield, weights, slot_to_target)
+
+    assert_true(abs(fitness - 1.5) < 1e-6, '启用 objective_refs 时应对距离和时间窗分项进行归一化')
+
+
 TEST_CASES = [
     test_logistic_initialization_supports_more_slots_than_uavs_when_ammo_allows,
     test_run_pso_can_return_assignment_plan_with_multi_task_sequences,
     test_evaluate_fitness_penalizes_cooperative_arrival_outside_sync_window,
     test_evaluate_fitness_does_not_penalize_arrival_inside_sync_window,
+    test_evaluate_fitness_supports_normalized_objective_refs,
 ]
 
 
