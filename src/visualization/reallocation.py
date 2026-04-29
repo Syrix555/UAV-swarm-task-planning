@@ -1138,9 +1138,8 @@ def plot_mcha_winning_bids(
     unique_targets = sorted({bid.target_id for bid in selected_bids})
     unique_uavs = sorted({bid.uav_id for bid in selected_bids})
     ax.text(
-        0.99,
-        0.94,
-        f'中标 {len(selected_bids)} 次 | 覆盖目标 {len(unique_targets)} 个 | 中标 UAV {len(unique_uavs)} 架',
+        1.02,
+        0.99,        f'中标 {len(selected_bids)} 次 | 覆盖目标 {len(unique_targets)} 个 | 中标 UAV {len(unique_uavs)} 架',
         transform=ax.transAxes,
         ha='right',
         va='top',
@@ -1164,7 +1163,7 @@ def plot_mcha_winning_bids(
     ax.spines['right'].set_visible(False)
     ax.spines['left'].set_alpha(0.6)
     ax.spines['bottom'].set_alpha(0.6)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0.0, 0.0, 0.82, 1.0))
 
     if output_path is not None:
         ensure_output_dir(output_path)

@@ -161,8 +161,8 @@ def plot_system_workflow(
     output_path: Optional[str] = None,
 ):
     """绘制论文支撑用的无人集群协同任务规划完整流程示意图。"""
-    fig, ax = plt.subplots(figsize=(13.2, 6.8))
-    ax.set_xlim(0, 1)
+    fig, ax = plt.subplots(figsize=(12.8, 6.8))
+    ax.set_xlim(0, 0.84)
     ax.set_ylim(0, 1)
     ax.axis('off')
 
@@ -173,7 +173,7 @@ def plot_system_workflow(
         {'label': '动态事件触发', 'detail': 'UAV 损失 / 新增目标\n需求变化 / 新增威胁', 'xy': (0.59, 0.64), 'color': '#f2d5d1'},
         {'label': '任务重分配', 'detail': 'MCHA 启发式拍卖\n开放任务需求修复', 'xy': (0.76, 0.64), 'color': '#dde6f6'},
         {'label': '航迹规划与仿真展示', 'detail': 'A* 路径搜索\nB 样条平滑', 'xy': (0.76, 0.30), 'color': '#e9ddf3'},
-        {'label': '实验结果输出', 'detail': '任务序列、需求满足\n代价变化、可视化图表', 'xy': (0.42, 0.30), 'color': '#dcebe7'},
+        {'label': '实验结果输出', 'detail': '任务序列、需求满足\n代价变化、可视化图表', 'xy': (0.59, 0.30), 'color': '#dcebe7'},
     ]
 
     box_width = 0.145
@@ -257,7 +257,7 @@ def plot_system_workflow(
         zorder=1,
     )
     ax.text(
-        0.30,
+        0.39,
         0.41,
         '实验分析反馈参数设置',
         ha='center',
@@ -268,9 +268,9 @@ def plot_system_workflow(
         zorder=4,
     )
 
-    ax.text(0.5, 0.90, title, ha='center', va='center', fontsize=15.0, weight='bold', color='#111827')
+    ax.text(0.42, 0.90, title, ha='center', va='center', fontsize=15.0, weight='bold', color='#111827')
     ax.text(
-        0.5,
+        0.42,
         0.84,
         '以任务序列为核心数据结构，贯通预分配、动态重分配与最终航迹展示',
         ha='center',
@@ -280,8 +280,8 @@ def plot_system_workflow(
     )
 
     for x0, x1, y, label in [
-        (0.005, 0.525, 0.49, '任务规划阶段'),
-        (0.515, 0.925, 0.17, '动态调整与展示阶段'),
+        (0.005, 0.495, 0.49, '任务规划阶段'),
+        (0.515, 0.835, 0.17, '动态调整与展示阶段'),
     ]:
         ax.plot([x0, x1], [y, y], color='#d1d5db', linewidth=1.0, alpha=0.9, zorder=0)
         ax.text((x0 + x1) / 2, y - 0.035, label, ha='center', va='center', fontsize=8.5, color='#6b7280')
