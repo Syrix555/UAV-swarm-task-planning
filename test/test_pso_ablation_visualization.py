@@ -74,7 +74,7 @@ def test_plot_convergence_ablation_saves_file():
         assert_true(os.path.exists(output_path), 'PSO 收敛曲线消融图应保存到指定路径')
         assert_true(os.path.getsize(output_path) > 0, '输出图片文件不应为空')
         assert_true(len(ax.lines) == len(curve_groups), '每个消融组应绘制一条均值收敛曲线')
-        assert_true(len(ax.collections) >= len(curve_groups), '收敛曲线图应绘制标准差阴影')
+        assert_true(len(ax.collections) == 0, '收敛曲线图不再绘制标准差阴影')
         fig.clf()
 
 

@@ -830,14 +830,14 @@ def plot_convergence_ablation(
     title: str,
     output_path: Optional[str] = None,
 ):
-    """绘制四组 PSO 消融实验的平均收敛曲线和标准差阴影。"""
+    """绘制四组 PSO 消融实验的平均收敛曲线。"""
     colors = ['#4c78a8', '#f58518', '#54a24b', '#d95f5f', '#7f7f7f']
+    linestyles = ['-', '--', '-.', ':', (0, (5, 2))]
 
     fig, ax = plt.subplots(figsize=(9.4, 5.8))
     for index, (label, curves) in enumerate(curve_groups.items()):
         curve_array = _curve_group_to_array(curves)
         mean_curve = np.mean(curve_array, axis=0)
-        std_curve = np.std(curve_array, axis=0)
         iterations = np.arange(len(mean_curve))
         color = colors[index % len(colors)]
 
@@ -846,15 +846,8 @@ def plot_convergence_ablation(
             mean_curve,
             label=label,
             color=color,
-            linewidth=2.0,
-        )
-        ax.fill_between(
-            iterations,
-            mean_curve - std_curve,
-            mean_curve + std_curve,
-            color=color,
-            alpha=0.14,
-            linewidth=0,
+            linestyle=linestyles[index % len(linestyles)],
+            linewidth=2.15,
         )
 
     ax.set_xlabel('迭代次数')
