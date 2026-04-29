@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from src.core.models import Battlefield
+from src.core.models import AssignmentPlan, Battlefield
 from src.route_planning.astar import astar_search
 from src.route_planning.geometry import (
     adaptive_sample_polyline,
@@ -30,6 +30,112 @@ class PathPlanningResult:
     failure_reason: Optional[str]
     path_length: float
     estimated_min_turn_radius: float
+
+
+@dataclass
+class RouteSegment:
+    """任务链中的一段航迹规划结果。"""
+
+    uav_id: int
+    segment_order: int
+    start_kind: str
+    start_id: int
+    end_target_id: int
+    start_xy: Tuple[float, float]
+    end_xy: Tuple[float, float]
+    result: PathPlanningResult
+
+    @property
+    def success(self) -> bool:
+        return self.result.success
+
+    @property
+    def failure_reason(self) -> Optional[str]:
+        return self.result.failure_reason
+
+    @property
+    def final_path(self) -> List[Tuple[float, float]]:
+        return self.result.final_path
+
+    @property
+    def path_length(self) -> float:
+        return self.result.path_length if self.success else 0.0
+
+
+@dataclass
+class UavRoutePlan:
+    """单架无人机的任务链航迹规划结果。"""
+
+    uav_id: int
+    target_ids: List[int]
+    segments: List[RouteSegment]
+
+    @property
+    def active(self) -> bool:
+        return bool(self.target_ids)
+
+    @property
+    def success(self) -> bool:
+        return all(segment.success for segment in self.segments)
+
+    @property
+    def failed_segments(self) -> List[RouteSegment]:
+        return [segment for segment in self.segments if not segment.success]
+
+    @property
+    def total_path_length(self) -> float:
+        return sum(segment.path_length for segment in self.segments)
+
+    @property
+    def full_path(self) -> List[Tuple[float, float]]:
+        full_path: List[Tuple[float, float]] = []
+        for segment in self.segments:
+            if not segment.success or not segment.final_path:
+                continue
+            if full_path and full_path[-1] == segment.final_path[0]:
+                full_path.extend(segment.final_path[1:])
+            else:
+                full_path.extend(segment.final_path)
+        return full_path
+
+
+@dataclass
+class AssignmentRoutePlan:
+    """一个 AssignmentPlan 对应的多无人机航迹规划结果。"""
+
+    uav_route_plans: Dict[int, UavRoutePlan]
+    source: str = 'assignment_plan'
+
+    @property
+    def success(self) -> bool:
+        return all(route.success for route in self.uav_route_plans.values())
+
+    @property
+    def active_uav_count(self) -> int:
+        return sum(1 for route in self.uav_route_plans.values() if route.active)
+
+    @property
+    def segment_count(self) -> int:
+        return sum(len(route.segments) for route in self.uav_route_plans.values())
+
+    @property
+    def failed_segments(self) -> List[RouteSegment]:
+        failed: List[RouteSegment] = []
+        for route in self.uav_route_plans.values():
+            failed.extend(route.failed_segments)
+        return failed
+
+    @property
+    def failed_uavs(self) -> List[int]:
+        return [
+            route.uav_id
+            for route in self.uav_route_plans.values()
+            if route.failed_segments
+        ]
+
+    @property
+    def total_path_length(self) -> float:
+        return sum(route.total_path_length for route in self.uav_route_plans.values())
 
 
 DEFAULT_PARAMS: Dict[str, float | int | bool] = {
@@ -66,9 +172,87 @@ def plan_path_for_uav(
     target_id: int,
     params: dict | None = None,
 ) -> PathPlanningResult:
-    merged_params = _merge_params(params)
+    """规划单架无人机从初始位置到指定目标的路径。"""
     uav = battlefield.get_uav(uav_id)
     target = battlefield.get_target(target_id)
+    return plan_path_between_points(
+        battlefield,
+        uav_id,
+        (uav.x, uav.y),
+        (target.x, target.y),
+        params=params,
+    )
+
+
+def plan_routes_for_assignment_plan(
+    battlefield: Battlefield,
+    assignment_plan: AssignmentPlan,
+    params: dict | None = None,
+    source: str = 'assignment_plan',
+) -> AssignmentRoutePlan:
+    """将 AssignmentPlan 中的 UAV 任务序列逐段转换为航迹规划结果。"""
+    uav_route_plans: Dict[int, UavRoutePlan] = {}
+
+    for uav in battlefield.uavs:
+        sequence = assignment_plan.uav_task_sequences.get(uav.id)
+        target_ids = sequence.target_ids() if sequence is not None else []
+        segments: List[RouteSegment] = []
+
+        current_kind = 'uav'
+        current_id = uav.id
+        current_xy = (uav.x, uav.y)
+
+        for segment_order, target_id in enumerate(target_ids):
+            target = battlefield.get_target(target_id)
+            goal_xy = (target.x, target.y)
+            result = plan_path_between_points(
+                battlefield,
+                uav.id,
+                current_xy,
+                goal_xy,
+                params=params,
+            )
+            segment = RouteSegment(
+                uav_id=uav.id,
+                segment_order=segment_order,
+                start_kind=current_kind,
+                start_id=current_id,
+                end_target_id=target_id,
+                start_xy=current_xy,
+                end_xy=goal_xy,
+                result=result,
+            )
+            segments.append(segment)
+
+            if not result.success:
+                break
+
+            current_kind = 'target'
+            current_id = target_id
+            current_xy = goal_xy
+
+        uav_route_plans[uav.id] = UavRoutePlan(
+            uav_id=uav.id,
+            target_ids=target_ids,
+            segments=segments,
+        )
+
+    return AssignmentRoutePlan(
+        uav_route_plans=uav_route_plans,
+        source=source,
+    )
+
+
+def plan_path_between_points(
+    battlefield: Battlefield,
+    uav_id: int,
+    start_xy: Tuple[float, float],
+    goal_xy: Tuple[float, float],
+    params: dict | None = None,
+) -> PathPlanningResult:
+    """规划单架无人机在任意两点之间的路径，用于后续任务链逐段规划。"""
+    merged_params = _merge_params(params)
+    uav = battlefield.get_uav(uav_id)
 
     grid_map = build_grid_map(
         battlefield,
@@ -77,8 +261,8 @@ def plan_path_for_uav(
     )
     original_path = astar_search(
         grid_map,
-        (uav.x, uav.y),
-        (target.x, target.y),
+        start_xy,
+        goal_xy,
         bool(merged_params['allow_diagonal']),
     )
     if not original_path:

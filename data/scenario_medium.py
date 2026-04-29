@@ -27,8 +27,8 @@ def create_medium_scenario() -> Battlefield:
         Target(id=13, x=84, y=82, value=8.5, required_uavs=1),
         Target(id=14, x=94, y=88, value=7.5, required_uavs=1),
         Target(id=15, x=68, y=92, value=9.0, required_uavs=1),
-        Target(id=16, x=62, y=34, value=6.5, required_uavs=1),
-        Target(id=17, x=66, y=68, value=8.0, required_uavs=1),
+        Target(id=16, x=66, y=32, value=6.5, required_uavs=1),
+        Target(id=17, x=72, y=68, value=8.0, required_uavs=1),
         Target(id=18, x=92, y=42, value=7.5, required_uavs=1),
         Target(id=19, x=82, y=90, value=8.5, required_uavs=1),
     ]

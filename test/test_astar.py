@@ -11,7 +11,7 @@ from config.params import ASTAR
 from data.scenario_small import create_small_scenario
 from src.core.models import Battlefield, Threat
 from src.route_planning.geometry import estimate_min_turn_radius, path_intersects_any_threat
-from src.route_planning.planner import plan_path_for_uav
+from src.route_planning.planner import plan_path_between_points, plan_path_for_uav
 
 
 DEFAULT_PARAMS = dict(ASTAR)
@@ -40,6 +40,43 @@ def test_plan_path_avoids_inflated_threats():
         not path_intersects_any_threat(result.final_path, battlefield.threats, DEFAULT_PARAMS['safety_margin']),
         '最终路径不得进入膨胀威胁区',
     )
+
+
+def test_plan_path_between_points_matches_uav_to_target_wrapper():
+    battlefield = create_small_scenario()
+    uav = battlefield.get_uav(0)
+    target = battlefield.get_target(0)
+
+    direct_result = plan_path_between_points(
+        battlefield,
+        uav_id=0,
+        start_xy=(uav.x, uav.y),
+        goal_xy=(target.x, target.y),
+        params=DEFAULT_PARAMS,
+    )
+    wrapper_result = plan_path_for_uav(battlefield, uav_id=0, target_id=0, params=DEFAULT_PARAMS)
+
+    assert_true(direct_result.success == wrapper_result.success, '通用点到点接口应保持原 UAV->目标接口语义')
+    assert_true(direct_result.failure_reason == wrapper_result.failure_reason, '失败原因应与原接口一致')
+    assert_true(len(direct_result.final_path) == len(wrapper_result.final_path), '最终路径采样点数量应与原接口一致')
+
+
+def test_plan_path_between_points_supports_target_to_target_segment():
+    battlefield = create_small_scenario()
+    battlefield.threats = []
+    start_target = battlefield.get_target(0)
+    end_target = battlefield.get_target(1)
+
+    result = plan_path_between_points(
+        battlefield,
+        uav_id=0,
+        start_xy=(start_target.x, start_target.y),
+        goal_xy=(end_target.x, end_target.y),
+        params=DEFAULT_PARAMS,
+    )
+
+    assert_true(result.success, '通用点到点接口应支持任务链中的目标到目标航段')
+    assert_true(len(result.final_path) >= 2, '目标到目标航段应返回有效路径')
 
 
 def test_los_simplification_reduces_waypoints():
@@ -144,6 +181,8 @@ def test_range_limit_is_checked():
 
 TEST_CASES = [
     ('基础避障', test_plan_path_avoids_inflated_threats),
+    ('通用点到点接口兼容原接口', test_plan_path_between_points_matches_uav_to_target_wrapper),
+    ('通用点到点接口支持目标到目标航段', test_plan_path_between_points_supports_target_to_target_segment),
     ('LOS 简化', test_los_simplification_reduces_waypoints),
     ('最小转弯半径约束', test_kinematic_path_respects_min_turn_radius),
     ('运动学元数据输出', test_kinematic_metadata_is_reported),
