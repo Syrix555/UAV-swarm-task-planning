@@ -14,7 +14,7 @@ from src.core.models import AssignmentPlan, Battlefield, Target, TaskNode, Threa
 from src.core.sequence_eval import evaluate_uav_task_sequence
 from src.pre_allocation.pso import run_pso
 from src.re_allocation.events import Event, EventType, analyze_plan_event_impact, apply_event_to_battlefield
-from src.re_allocation.mcha import run_mcha_for_plan
+from src.re_allocation.mcha import marginal_score_for_plan, normalized_marginal_score, run_mcha_for_plan
 
 
 def assert_true(condition, message):
@@ -78,6 +78,75 @@ def assert_all_targets_satisfied(battlefield: Battlefield, plan: AssignmentPlan)
             assigned_count >= target.required_uavs,
             f'目标{target.id} 应满足需求: assigned={assigned_count}, required={target.required_uavs}',
         )
+
+
+def test_normalized_marginal_score_uses_objective_refs():
+    weights = {
+        'w1': 1.0,
+        'w2': 1.0,
+        'w3': 1.0,
+        'w4': 1.0,
+        'objective_refs': {
+            'distance_ref': 100.0,
+            'threat_ref': 20.0,
+            'time_window_ref': 0.5,
+            'reward_ref': 10.0,
+        },
+    }
+
+    score = normalized_marginal_score(
+        distance_cost=100.0,
+        threat_cost=20.0,
+        time_cost=0.5,
+        reward=10.0,
+        weights=weights,
+    )
+
+    assert_true(abs(score + 2.0) < 1e-9, 'MCHA 边际得分应使用统一参考值归一化各分项')
+
+
+def test_plan_marginal_score_includes_cooperative_time_window_increment():
+    battlefield = Battlefield(
+        uavs=[
+            UAV(id=0, x=0.0, y=0.0, speed=100.0, ammo=1, range_left=200.0),
+            UAV(id=1, x=100.0, y=0.0, speed=100.0, ammo=1, range_left=200.0),
+        ],
+        targets=[
+            Target(id=0, x=0.0, y=0.0, value=10.0, required_uavs=2),
+        ],
+        threats=[],
+        map_size=(120.0, 80.0),
+    )
+    plan = AssignmentPlan(
+        uav_task_sequences={
+            0: UavTaskSequence(uav_id=0, tasks=[TaskNode(target_id=0, order=0)]),
+            1: UavTaskSequence(uav_id=1, tasks=[]),
+        },
+        target_assignees={0: [0]},
+    )
+    weights = {
+        'w1': 0.0,
+        'w2': 0.0,
+        'w3': 1.0,
+        'w4': 0.0,
+        'alpha': 1.0,
+        'objective_refs': {
+            'distance_ref': 1.0,
+            'threat_ref': 1.0,
+            'time_window_ref': 0.5,
+            'reward_ref': 1.0,
+        },
+    }
+
+    score = marginal_score_for_plan(
+        battlefield.get_uav(1),
+        battlefield.get_target(0),
+        plan,
+        battlefield,
+        weights,
+    )
+
+    assert_true(abs(score + 1.0) < 1e-9, '任务序列版 MCHA 应将目标协同到达惩罚增量计入边际得分')
 
 
 def test_target_demand_increase_appends_missing_task_to_sequence_plan():
@@ -322,6 +391,8 @@ def test_reallocation_scenario_threat_added_keeps_all_targets_satisfied():
 
 
 TEST_CASES = [
+    test_normalized_marginal_score_uses_objective_refs,
+    test_plan_marginal_score_includes_cooperative_time_window_increment,
     test_target_demand_increase_appends_missing_task_to_sequence_plan,
     test_uav_lost_releases_whole_sequence_and_repairs_open_tasks,
     test_target_added_appends_new_target_to_available_uav_sequence,

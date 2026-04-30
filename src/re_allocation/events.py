@@ -7,6 +7,29 @@ from src.core.models import AssignmentPlan, Battlefield, Target, TaskNode, Threa
 from config.params import WEIGHTS           # 这里暂时使用预分配中的权重，未来可能依据场景不同使用不同的权重
 
 
+def normalized_marginal_score(
+    distance_cost: float,
+    threat_cost: float,
+    time_cost: float,
+    reward: float,
+    weights: dict,
+) -> float:
+    """计算多维边际得分，可选使用统一归一化参考值。"""
+    objective_refs = weights.get('objective_refs')
+    if objective_refs:
+        distance_cost = distance_cost / max(float(objective_refs['distance_ref']), 1e-12)
+        threat_cost = threat_cost / max(float(objective_refs['threat_ref']), 1e-12)
+        time_cost = time_cost / max(float(objective_refs['time_window_ref']), 1e-12)
+        reward = reward / max(float(objective_refs['reward_ref']), 1e-12)
+
+    return (
+        weights['w4'] * reward
+        - weights['w1'] * distance_cost
+        - weights['w2'] * threat_cost
+        - weights['w3'] * time_cost
+    )
+
+
 class EventType(Enum):
     """触发MCHA重分配的事件类型。"""
 
@@ -627,11 +650,12 @@ def retention_score(
     )
     reward = target.value
 
-    return (
-        weights['w4'] * reward
-        - weights['w1'] * distance_cost
-        - weights['w2'] * threat_cost
-        - weights['w3'] * time_increment
+    return normalized_marginal_score(
+        distance_cost,
+        threat_cost,
+        time_increment,
+        reward,
+        weights,
     )
 
 

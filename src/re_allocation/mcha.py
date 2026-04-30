@@ -8,6 +8,29 @@ from src.core.sequence_eval import evaluate_uav_task_sequence
 from src.re_allocation.events import PlanReallocationState, ReallocationState, copy_assignment_plan
 
 
+def normalized_marginal_score(
+    distance_cost: float,
+    threat_cost: float,
+    time_cost: float,
+    reward: float,
+    weights: dict,
+) -> float:
+    """计算 MCHA 边际得分，可选使用与 PSO 相同的目标函数归一化参考值。"""
+    objective_refs = weights.get('objective_refs')
+    if objective_refs:
+        distance_cost = distance_cost / max(float(objective_refs['distance_ref']), 1e-12)
+        threat_cost = threat_cost / max(float(objective_refs['threat_ref']), 1e-12)
+        time_cost = time_cost / max(float(objective_refs['time_window_ref']), 1e-12)
+        reward = reward / max(float(objective_refs['reward_ref']), 1e-12)
+
+    return (
+        weights['w4'] * reward
+        - weights['w1'] * distance_cost
+        - weights['w2'] * threat_cost
+        - weights['w3'] * time_cost
+    )
+
+
 @dataclass
 class BidResult:
     """单架无人机对单个开放目标的竞标结果。"""
@@ -294,13 +317,23 @@ def marginal_score_for_plan(
 
     distance_delta = candidate_eval.total_distance - current_eval.total_distance
     threat_delta = sequence_threat_cost(battlefield, candidate_sequence) - sequence_threat_cost(battlefield, sequence)
-    time_delta = candidate_eval.time_window_penalty - current_eval.time_window_penalty
+    explicit_time_delta = candidate_eval.time_window_penalty - current_eval.time_window_penalty
+    appended_task = candidate_eval.evaluated_sequence.tasks[-1]
+    cooperative_time_delta = time_window_increment_for_plan(
+        target.id,
+        appended_task.planned_arrival_time,
+        current_plan,
+        battlefield,
+        weights['alpha'],
+    )
+    time_delta = explicit_time_delta + cooperative_time_delta
 
-    return (
-        weights['w4'] * target.value
-        - weights['w1'] * distance_delta
-        - weights['w2'] * threat_delta
-        - weights['w3'] * time_delta
+    return normalized_marginal_score(
+        distance_delta,
+        threat_delta,
+        time_delta,
+        target.value,
+        weights,
     )
 
 
@@ -377,6 +410,35 @@ def compute_eta_matrix_for_plan(
     return etas
 
 
+def target_arrival_times_for_plan(
+    battlefield: Battlefield,
+    plan: AssignmentPlan,
+    target_id: int,
+) -> List[float]:
+    """获取当前任务链方案中所有 UAV 到达某目标的累计到达时刻。"""
+    arrivals: List[float] = []
+    for sequence in plan.uav_task_sequences.values():
+        evaluated = evaluate_uav_task_sequence(battlefield, sequence)
+        for task in evaluated.evaluated_sequence.tasks:
+            if task.target_id == target_id:
+                arrivals.append(task.planned_arrival_time)
+    return arrivals
+
+
+def time_window_increment_for_plan(
+    target_id: int,
+    new_arrival_time: float,
+    current_plan: AssignmentPlan,
+    battlefield: Battlefield,
+    alpha: float,
+) -> float:
+    """计算任务序列版 MCHA 追加任务后对目标协同到达时间窗的惩罚增量。"""
+    old_arrivals = target_arrival_times_for_plan(battlefield, current_plan, target_id)
+    old_penalty = synchronized_penalty(old_arrivals, alpha)
+    new_penalty = synchronized_penalty(old_arrivals + [new_arrival_time], alpha)
+    return new_penalty - old_penalty
+
+
 def marginal_score(
     uav: UAV,
     target: Target,
@@ -402,11 +464,12 @@ def marginal_score(
     )
     reward = target.value
 
-    return (
-        weights['w4'] * reward
-        - weights['w1'] * distance_cost
-        - weights['w2'] * threat_cost
-        - weights['w3'] * time_increment
+    return normalized_marginal_score(
+        distance_cost,
+        threat_cost,
+        time_increment,
+        reward,
+        weights,
     )
 
 

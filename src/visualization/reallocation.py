@@ -1100,7 +1100,7 @@ def plot_mcha_winning_bids(
 
     min_score = float(np.min(scores))
     max_score = float(np.max(scores))
-    score_span = max(max_score - min_score, 1.0)
+    score_span = max(max_score - min_score, 1e-9)
     normalized = (scores - min_score) / score_span
     colors = [
         plt.cm.Blues(0.45 + 0.42 * value)
@@ -1117,7 +1117,7 @@ def plot_mcha_winning_bids(
     )
     ax.axvline(0.0, color='#777777', linewidth=1.0, alpha=0.55)
 
-    offset = max(abs(min_score), abs(max_score), 1.0) * 0.025
+    x_min, x_max, offset, _ = _mcha_score_axis_scale(scores)
     for bar, score in zip(bars, scores):
         if score >= 0:
             x_text = score + offset
@@ -1128,7 +1128,7 @@ def plot_mcha_winning_bids(
         ax.text(
             x_text,
             bar.get_y() + bar.get_height() / 2.0,
-            f'{score:.2f}',
+            _format_mcha_score(float(score)),
             ha=ha,
             va='center',
             fontsize=8.5,
@@ -1155,8 +1155,7 @@ def plot_mcha_winning_bids(
     ax.set_ylabel('中标顺序与任务')
     ax.set_title(title)
 
-    x_margin = max(abs(min_score), abs(max_score), 1.0) * 0.16
-    ax.set_xlim(min(min_score, 0.0) - x_margin, max(max_score, 0.0) + x_margin)
+    ax.set_xlim(x_min, x_max)
     ax.grid(True, axis='x', alpha=0.18, linewidth=0.8)
     ax.set_axisbelow(True)
     ax.spines['top'].set_visible(False)
@@ -1174,6 +1173,30 @@ def plot_mcha_winning_bids(
 
 def _bid_key(bid: BidResult) -> tuple[int, int]:
     return bid.uav_id, bid.target_id
+
+
+def _format_mcha_score(score: float) -> str:
+    """按归一化后的小量级得分自适应显示精度。"""
+    if abs(score) < 5e-5:
+        score = 0.0
+    abs_score = abs(score)
+    if abs_score >= 1.0:
+        return f'{score:.2f}'
+    if abs_score >= 0.1:
+        return f'{score:.3f}'
+    return f'{score:.4f}'
+
+
+def _mcha_score_axis_scale(scores: np.ndarray) -> tuple[float, float, float, float]:
+    """为归一化 MCHA 得分计算坐标范围和标注偏移量。"""
+    min_score = float(np.min(scores))
+    max_score = float(np.max(scores))
+    scale = max(abs(min_score), abs(max_score), max_score - min_score, 1e-3)
+    margin = scale * 0.18
+    offset = scale * 0.035
+    x_min = min(min_score, 0.0) - margin
+    x_max = max(max_score, 0.0) + margin
+    return x_min, x_max, offset, scale
 
 
 def plot_mcha_candidate_bid_scores(
@@ -1261,14 +1284,13 @@ def plot_mcha_candidate_bid_scores(
             label='中标投标',
         )
 
-    x_abs_max = max(abs(float(np.min(scores))), abs(float(np.max(scores))), 1.0)
-    offset = x_abs_max * 0.025
+    x_min, x_max, offset, _ = _mcha_score_axis_scale(scores)
     for row_y, score, is_accepted in zip(y, scores, accepted):
         x_text = score + offset if score >= 0 else score - offset
         ax.text(
             x_text,
             row_y,
-            f'{score:.2f}' + ('  中标' if is_accepted else ''),
+            _format_mcha_score(float(score)) + ('  中标' if is_accepted else ''),
             ha='left' if score >= 0 else 'right',
             va='center',
             fontsize=8.2,
@@ -1292,7 +1314,7 @@ def plot_mcha_candidate_bid_scores(
     ax.set_ylabel('轮次 / UAV / 目标')
     fig.suptitle(title, fontsize=13, y=0.93)
     ax.set_title(summary_text, fontsize=9.2, color='#2f5f8f', pad=6)
-    ax.set_xlim(float(np.min(scores)) - x_abs_max * 0.16, float(np.max(scores)) + x_abs_max * 0.22)
+    ax.set_xlim(x_min, x_max)
     ax.grid(True, axis='x', alpha=0.18, linewidth=0.8)
     ax.set_axisbelow(True)
     ax.spines['top'].set_visible(False)
