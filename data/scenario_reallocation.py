@@ -27,7 +27,7 @@ def create_reallocation_scenario() -> Battlefield:
         Target(id=5, x=76, y=64, value=8.5, required_uavs=1),
         Target(id=6, x=86, y=72, value=10.0, required_uavs=2),
         Target(id=7, x=80, y=82, value=7.0, required_uavs=1),
-        Target(id=8, x=68, y=88, value=9.0, required_uavs=1),
+        Target(id=8, x=70, y=90, value=9.0, required_uavs=1),
         Target(id=9, x=90, y=94, value=6.0, required_uavs=1),
         Target(id=10, x=72, y=20, value=8.5, required_uavs=1),
         Target(id=11, x=88, y=30, value=9.5, required_uavs=2),
