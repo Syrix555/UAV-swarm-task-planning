@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.core.models import Battlefield
-from src.visualization.common import ensure_output_dir
+from src.visualization.common import ensure_output_dir, set_closed_axes
 
 
 def plot_scenario_elements(
@@ -146,8 +146,7 @@ def plot_scenario_elements(
     ax.set_aspect('equal')
     ax.grid(True, alpha=0.18, linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.spines['top'].set_alpha(0.45)
-    ax.spines['right'].set_alpha(0.45)
+    set_closed_axes(ax)
 
     if output_path is not None:
         ensure_output_dir(output_path)

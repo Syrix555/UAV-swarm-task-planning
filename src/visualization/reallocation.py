@@ -14,6 +14,7 @@ from src.visualization.common import (
     draw_assignment_lines,
     draw_battlefield,
     ensure_output_dir,
+    set_closed_axes,
 )
 from src.visualization.preallocation import (
     SEQUENCE_COLORS,
@@ -885,10 +886,7 @@ def plot_plan_reallocation_target_loads(
     ax.set_ylim(0, max(max(before_counts, default=0), max(after_counts, default=0), max(after_required, default=0)) + 1.0)
     ax.grid(True, axis='y', alpha=0.18, linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_alpha(0.6)
-    ax.spines['bottom'].set_alpha(0.6)
+    set_closed_axes(ax)
     ax.legend(
         loc='upper left',
         ncol=3,
@@ -1042,10 +1040,7 @@ def plot_plan_reallocation_uav_loads(
     ax.set_xticks(np.arange(0, max_x + 1))
     ax.grid(True, axis='x', alpha=0.18, linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_alpha(0.6)
-    ax.spines['bottom'].set_alpha(0.6)
+    set_closed_axes(ax)
     ax.legend(
         loc='upper center',
         bbox_to_anchor=(0.5, -0.12),
@@ -1158,10 +1153,7 @@ def plot_mcha_winning_bids(
     ax.set_xlim(x_min, x_max)
     ax.grid(True, axis='x', alpha=0.18, linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_alpha(0.6)
-    ax.spines['bottom'].set_alpha(0.6)
+    set_closed_axes(ax)
     fig.tight_layout(rect=(0.0, 0.0, 0.82, 1.0))
 
     if output_path is not None:
@@ -1317,10 +1309,7 @@ def plot_mcha_candidate_bid_scores(
     ax.set_xlim(x_min, x_max)
     ax.grid(True, axis='x', alpha=0.18, linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_alpha(0.6)
-    ax.spines['bottom'].set_alpha(0.6)
+    set_closed_axes(ax)
 
     ax.legend(
         loc='upper left',
@@ -1460,8 +1449,7 @@ def plot_mcha_open_demand_repair(
     ax_heatmap.set_yticks(np.arange(-0.5, len(target_ids), 1), minor=True)
     ax_heatmap.grid(which='minor', color='white', linewidth=1.1)
     ax_heatmap.tick_params(which='minor', bottom=False, left=False)
-    for spine in ax_heatmap.spines.values():
-        spine.set_visible(False)
+    set_closed_axes(ax_heatmap)
 
     colorbar = fig.colorbar(image, ax=ax_heatmap, fraction=0.026, pad=0.018)
     colorbar.set_label('剩余需求')
@@ -1517,10 +1505,7 @@ def plot_mcha_open_demand_repair(
     ax_curve.set_ylim(0, max(initial_total, 1) * 1.18)
     ax_curve.grid(True, axis='y', alpha=0.18, linewidth=0.8)
     ax_curve.set_axisbelow(True)
-    ax_curve.spines['top'].set_visible(False)
-    ax_curve.spines['right'].set_visible(False)
-    ax_curve.spines['left'].set_alpha(0.6)
-    ax_curve.spines['bottom'].set_alpha(0.6)
+    set_closed_axes(ax_curve)
 
     if output_path is not None:
         ensure_output_dir(output_path)

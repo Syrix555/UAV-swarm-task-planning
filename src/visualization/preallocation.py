@@ -6,7 +6,7 @@ import numpy as np
 
 from src.core.models import AssignmentPlan, Battlefield, UavTaskSequence
 from src.core.sequence_eval import evaluate_uav_task_sequence
-from src.visualization.common import ensure_output_dir
+from src.visualization.common import ensure_output_dir, set_closed_axes
 
 
 SEQUENCE_COLORS = [
@@ -51,8 +51,7 @@ def draw_compact_battlefield(ax, battlefield: Battlefield, title: str = "") -> N
     ax.set_title(title)
     ax.set_aspect('equal')
     ax.grid(True, alpha=0.18, linewidth=0.8)
-    ax.spines['top'].set_alpha(0.45)
-    ax.spines['right'].set_alpha(0.45)
+    set_closed_axes(ax)
 
 
 def _sequence_points(battlefield: Battlefield, sequence: UavTaskSequence) -> list[tuple[float, float]]:
@@ -265,10 +264,7 @@ def plot_target_loads(
     ax.set_ylim(0, max(max(assigned_counts, default=0), max(required_counts, default=0)) + 0.9)
     ax.set_axisbelow(True)
     ax.grid(True, axis='y', alpha=0.18, linewidth=0.8)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_alpha(0.6)
-    ax.spines['bottom'].set_alpha(0.6)
+    set_closed_axes(ax)
     ax.legend(
         loc='upper left',
         ncol=2,
@@ -498,10 +494,7 @@ def plot_uav_task_loads(
     ax.set_ylim(0, max(max(task_counts, default=0), max(ammo_limits, default=0)) + 0.9)
     ax.grid(True, axis='y', alpha=0.18, linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_alpha(0.6)
-    ax.spines['bottom'].set_alpha(0.6)
+    set_closed_axes(ax)
     ax.legend(
         loc='upper left',
         ncol=2,
@@ -735,10 +728,7 @@ def plot_cooperative_arrival_windows(
     ax.set_title(title)
     ax.grid(True, axis='x', alpha=0.22, linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_alpha(0.6)
-    ax.spines['bottom'].set_alpha(0.6)
+    set_closed_axes(ax)
     ax.text(
         0.99,
         0.94,
@@ -799,10 +789,7 @@ def plot_initial_population_comparison(
         ax.set_xlabel('任务槽位')
         ax.set_ylabel('粒子编号')
         ax.grid(False)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_alpha(0.55)
-        ax.spines['bottom'].set_alpha(0.55)
+        set_closed_axes(ax)
 
     cbar = fig.colorbar(images[-1], ax=axes, fraction=0.035, pad=0.025)
     cbar.set_label('UAV 编号')
@@ -855,10 +842,7 @@ def plot_convergence_ablation(
     ax.set_title(title)
     ax.grid(True, alpha=0.22, linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_alpha(0.6)
-    ax.spines['bottom'].set_alpha(0.6)
+    set_closed_axes(ax)
     ax.legend(
         loc='upper right',
         frameon=True,
@@ -935,10 +919,7 @@ def plot_final_fitness_ablation(
     ax.set_title(title)
     ax.grid(True, axis='y', alpha=0.22, linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_alpha(0.6)
-    ax.spines['bottom'].set_alpha(0.6)
+    set_closed_axes(ax)
     ax.legend(
         loc='upper right',
         frameon=True,

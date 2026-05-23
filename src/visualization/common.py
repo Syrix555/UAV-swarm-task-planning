@@ -17,6 +17,14 @@ def ensure_output_dir(output_path: str) -> None:
         os.makedirs(directory, exist_ok=True)
 
 
+def set_closed_axes(ax, alpha: float = 0.72, linewidth: float = 0.9) -> None:
+    """统一论文图坐标轴样式，保持上下左右四条轴线全封闭。"""
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_alpha(alpha)
+        spine.set_linewidth(linewidth)
+
+
 def draw_battlefield(ax, battlefield: Battlefield, title: str = "") -> None:
     """绘制战场基础元素：威胁区、无人机、目标。"""
     for threat in battlefield.threats:
@@ -57,6 +65,7 @@ def draw_battlefield(ax, battlefield: Battlefield, title: str = "") -> None:
     ax.set_title(title)
     ax.set_aspect('equal')
     ax.grid(True, alpha=0.3)
+    set_closed_axes(ax)
 
 
 def draw_assignment_lines(
@@ -129,6 +138,7 @@ def plot_eta_distribution(
     ax.set_ylabel('预计到达时间 (h)')
     ax.set_title(title)
     ax.grid(True, alpha=0.3)
+    set_closed_axes(ax)
 
     if output_path is not None:
         ensure_output_dir(output_path)
