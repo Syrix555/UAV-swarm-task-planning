@@ -3,6 +3,7 @@
 """
 import os
 import sys
+import time
 from copy import deepcopy
 
 import matplotlib.pyplot as plt
@@ -121,6 +122,7 @@ def main():
     )
     print(f'PSO 完成，最终适应度: {curve[-1]:.4f}')
 
+    start = time.perf_counter()
     event = build_event(event_mode)
     if event.type == EventType.TARGET_DEMAND_INCREASED:
         target_id = event.data['target_id']
@@ -131,6 +133,8 @@ def main():
 
     state = analyze_plan_event_impact(event, battlefield_after, plan_before)
     result = run_mcha_for_plan(battlefield_after, WEIGHTS, state, MCHA)
+
+    end = time.perf_counter()
 
     event_name = event.type.value
     event_result_dir = os.path.join(RESULT_DIR, event_name)
@@ -209,6 +213,7 @@ def main():
     print(f'remaining_demand_after: {result.remaining_demand}')
     print(f'iterations: {result.iterations}')
     print(f'selected_bids: {len(result.selected_bids)}')
+    print(f'MCHA 运行时间: {end - start:.8f} 秒')
     print('图表已保存到:')
     print(f'- {before_after_output_path}')
     print(f'- {diff_output_path}')
